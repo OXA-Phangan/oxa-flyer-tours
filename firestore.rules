@@ -1,0 +1,1303 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userRole() {
+      return isSignedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function isAdmin() {
+      return userRole() == 'admin';
+    }
+
+    function isSalesAgent() {
+      return userRole() == 'sales_agent';
+    }
+
+    function isEntranceStaff() {
+      return userRole() == 'entrance_staff';
+    }
+
+    function isStaff() {
+      return isAdmin() || isSalesAgent() || isEntranceStaff();
+    }
+
+    // ---- OXA Poster Tour access (separate app, same Firebase project) ----
+    // That app has no `users/{uid}` role docs of its own. Field crew are
+    // granted a `posterCrew: true` custom claim (set via a one-off admin
+    // script, oxa-poster-tour/scripts/set-poster-crew-claim.js — NOT a
+    // hardcoded email list here, since the crew roster changes and a
+    // custom claim doesn't require a rules redeploy when it does).
+    // Management is the two fixed, known addresses already used for that
+    // app's UI-layer allow-list (lib/constants.ts there) — small and
+    // stable enough to hardcode directly, same tradeoff this file already
+    // makes elsewhere (no settings/permissions UI yet, poster-round-
+    // build-spec.md §4.2).
+    // orgManagement custom claim OR'd in alongside the hardcoded emails —
+    // an employee whose profile has employmentType "management" gets the
+    // same management-tier access as the two bootstrap accounts, without
+    // needing to be manually added here. Granted/revoked by
+    // oxa-poster-tour/functions/index.js's syncPositionDerivedClaims.
+    // Hardcoded emails stay — they're the bootstrap accounts that must
+    // always work even before any employees collection exists. Storage
+    // rules can't reference these functions, so storage.rules duplicates
+    // this same OR clause — keep both in sync if this ever changes.
+    function isPosterManagement() {
+      return isSignedIn() &&
+             (request.auth.token.email.lower() in
+               ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com'] ||
+              request.auth.token.orgManagement == true);
+    }
+
+    function isPosterCrew() {
+      return isSignedIn() &&
+             (request.auth.token.posterCrew == true || isPosterManagement());
+    }
+
+    // ---- OXA Employee Portal access (separate app, same Firebase project) ----
+    // Same pattern as "OXA Poster Tour access" above: field crew get an
+    // `employeePortalAccess: true` custom claim (see oxa-employee-portal/
+    // scripts/set-employee-portal-access-claim.js) — deliberately a NEW,
+    // distinct claim from posterCrew, even though initially the same people
+    // hold both, since these are conceptually different apps sharing
+    // infrastructure, not the same access domain. Management is the same
+    // two fixed addresses used by every sibling app so far.
+    // Same orgManagement OR clause as isPosterManagement() above — see its
+    // comment.
+    function isPortalManagement() {
+      return isSignedIn() &&
+             (request.auth.token.email.lower() in
+               ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com'] ||
+              request.auth.token.orgManagement == true);
+    }
+
+    function isEmployeePortalAccess() {
+      return isSignedIn() &&
+             (request.auth.token.employeePortalAccess == true || isPortalManagement());
+    }
+
+    // True if a pendingUsers doc for `email` exists and its stored role is
+    // exactly `role`. Guarded with exists() first — get() on a missing doc
+    // is an error, not a falsy value. Used by the users/{userId} create
+    // rule below so a first-sign-in user can only claim a role that an
+    // admin actually pre-configured for their exact email (get() reads the
+    // authoritative stored document server-side; it doesn't trust anything
+    // the client merely claims in its own write).
+    function pendingRoleMatches(email, role) {
+      return exists(/databases/$(database)/documents/pendingUsers/$(email)) &&
+             get(/databases/$(database)/documents/pendingUsers/$(email)).data.role == role;
+    }
+
+    // Every signed-in user can read/create their own doc. On first login it's
+    // either role-less (pending an admin's manual assignment) or, if an
+    // admin pre-configured a role for this exact email in `pendingUsers`
+    // (see scripts/add-pending-users.js), created with that role directly —
+    // see lib/auth-context.tsx. Only an admin can change a role after
+    // creation, list all users, or delete a user.
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn()
+                    && request.auth.uid == userId
+                    && request.resource.data.email == request.auth.token.email
+                    && (request.resource.data.role == null ||
+                        pendingRoleMatches(request.auth.token.email.lower(), request.resource.data.role));
+      allow update, delete: if isAdmin();
+    }
+
+    // Pre-provisioned roles for team members who haven't signed in yet,
+    // keyed by lowercased email (a uid can't be known before someone's
+    // first Google sign-in). Admin-managed only, except: the matching
+    // signed-in user can read their own entry (needed by the first-login
+    // check in lib/auth-context.tsx) and delete it once consumed (a
+    // one-time grant, not a live mirror of `users`). `list` stays
+    // admin-only so no one can enumerate every pre-configured email/role.
+    match /pendingUsers/{email} {
+      allow get: if isAdmin() || (isSignedIn() && request.auth.token.email.lower() == email);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin() || (isSignedIn() && request.auth.token.email.lower() == email);
+    }
+
+    // Sellers: admin + sales_agent create/edit, delete admin only.
+    // entrance_staff gets read-only access — the Capture tab's Voucher
+    // section needs to search sellers for all three roles per the spec,
+    // even though entrance_staff can't create/edit/delete them. The
+    // `update` OR also lets the public Seller Portal blind-write exactly
+    // three fields (never read the doc itself — see `sellerPortals` below
+    // for what the portal actually reads): `needsTickets` and
+    // `needsPromoMaterial` can only ever be flipped to `true` from the
+    // portal (clearing either back to false is a staff-only action — for
+    // needsTickets that's done when issuing new tickets; needsPromoMaterial
+    // has no equivalent automatic clear, only the profile's "Dismiss
+    // promo material request" button and SellerForm's manual checkbox,
+    // both staff-only, already covered by the isAdmin()/isSalesAgent() OR
+    // above), and `lastConfirmedAt` can only be set to a timestamp (the
+    // portal's ticket-confirm checkbox).
+    // `read` also allows the OXA Poster Tour's crew/management (see
+    // isPosterCrew() above) — that separate app reads this same
+    // collection live. The Poster Tour's `posterNote` write-back is
+    // applied server-side by a Cloud Function using the Admin SDK, which
+    // bypasses these rules entirely. The `queueOrder` carve-out below is
+    // that app's one genuine client write path — management-only (not
+    // isPosterCrew()'s broader OR), drag-and-drop reordering of the Hotel
+    // Tour queue within a district (oxa-poster-tour/lib/seller-order.ts).
+    match /sellers/{sellerId} {
+      allow read: if isStaff() || isPosterCrew();
+      allow create: if isAdmin() || isSalesAgent();
+      allow update: if isAdmin() || isSalesAgent() ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['needsTickets']) &&
+                     request.resource.data.needsTickets == true) ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['needsPromoMaterial']) &&
+                     request.resource.data.needsPromoMaterial == true) ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastConfirmedAt']) &&
+                     request.resource.data.lastConfirmedAt is timestamp) ||
+                    (isPosterManagement() &&
+                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['queueOrder']) &&
+                     request.resource.data.queueOrder is number);
+      allow delete: if isAdmin();
+    }
+
+    // Tickets: issuing (create/delete) restricted to admin + sales_agent.
+    // Capture (status updates) is allowed for all three roles. Includes a
+    // `lostAt` timestamp field beyond the original spec list, needed by the
+    // Seller Profile "Lost" tab's date-lost display — no rule change needed,
+    // it's just another field under the same update permission.
+    //
+    // `get` is public (not `list`): a single ticket doc has no PII beyond
+    // a sellerId, and its 20-character random doc ID is only ever learned
+    // via a seller's `sellerPortals` doc, itself gated behind the secret
+    // `portalToken` — so "knowing the ID" is already the real access
+    // control, same trust model Firestore's own `get`-by-ID always uses.
+    // `list` stays staff-only so nobody can dump the whole collection.
+    // The Seller Portal's ticket-confirm checkbox is the one public write:
+    // scoped to flipping `confirmedBySeller` to `true` and stamping
+    // `confirmedAt` alongside it (the per-ticket confirmation timestamp
+    // shown in the main app's Active tickets list), nothing else.
+    match /tickets/{ticketId} {
+      allow get: if true;
+      allow list: if isStaff();
+      allow create, delete: if isAdmin() || isSalesAgent();
+      allow update: if isStaff() ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmedBySeller', 'confirmedAt']) &&
+                     request.resource.data.confirmedBySeller == true &&
+                     request.resource.data.confirmedAt is timestamp);
+    }
+
+    // Undo (delete the log entry + revert the ticket) is available to all
+    // three roles from the Capture tab's Log view, same as capture itself —
+    // entrance_staff needs this to correct their own mis-taps at the door,
+    // not just admin/sales_agent.
+    match /captureLog/{logId} {
+      allow read, create, update, delete: if isStaff();
+    }
+
+    // Vouchers: a persons-count entry against a seller for a given event
+    // date (Capture tab's "Voucher" section) — deliberately separate from
+    // the numbered-ticket flow (no ticket number, no captureLog entry, no
+    // undo UI, per spec). All three roles can log one; only admin can
+    // correct/remove an entry after the fact, same "admin can always fix
+    // data" precedent as captureLog/wristbandRecords, even though no UI
+    // exercises that today.
+    match /vouchers/{voucherId} {
+      allow read, create: if isStaff();
+      allow update, delete: if isAdmin();
+    }
+
+    // All three roles issue/capture wristbands & stickers (role table:
+    // "Wristbands/Stickers: full" for everyone), so this stays isStaff()
+    // rather than split further. The Log view's "admin can directly edit"
+    // restriction is enforced client-side only (same precedent as the Sold
+    // tab's admin-only revert button on `tickets`, which also has a
+    // broader isStaff() rule) — not worth a field-level rule for an
+    // internal correction tool.
+    // `read` also grants oxa-employee-portal's management dashboard
+    // (Wristband Summary widget) — write stays isStaff()-only, that widget
+    // is read-only.
+    match /wristbandRecords/{eventDate} {
+      allow read: if isStaff() || isPortalManagement();
+      allow write: if isStaff();
+    }
+
+    match /stickerRecords/{eventDate} {
+      allow read, write: if isStaff();
+    }
+
+    // Stock corrections are admin-only per the role table.
+    match /stock/{itemKey} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // External sales (MegaTix + GetYourGuide), doc ID = event date
+    // ("YYYY-MM-DD"). Written only by the weekly unattended import script
+    // (scripts/weekly-external-sales-import.js, signed in as the same
+    // admin import user as the other scripts/lib/firebase-client.js
+    // scripts) -- not editable from the app UI, so admin-only write.
+    match /externalSales/{eventDate} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // Pre-app-era monthly wristband totals (2024-2025), doc ID =
+    // "YYYY-MM". One-off backfill from a historical spreadsheet
+    // (scripts/import-historical-wristband-stats.js, same admin import
+    // user pattern as externalSales above) for the Stats Compare feature
+    // to show alongside live wristbandRecords data -- not editable from
+    // the app UI, so admin-only write, same as externalSales.
+    match /historicalMonthlyStats/{yearMonth} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // Includes a `lastCaptureDate` field beyond the original spec list (the
+    // global preference the Capture tab's date picker sets and the No-Show
+    // flow reads its eventDate from) and a `lastEventDate` field (the
+    // shared "last used event date" that auto-flows between the Wristband
+    // Issue -> Sticker Issue -> Ticket Capture -> Wristband Capture ->
+    // Sticker Capture date pickers — see GlobalSettings.lastEventDate).
+    // Unlike `lowStockThreshold`, every staff role uses these date pickers,
+    // so they need to write these two fields — but not the rest of
+    // settings/global. Scoped narrowly via diff/keys checks rather than
+    // opening the whole doc to non-admins.
+    // `read` also grants oxa-employee-portal's management dashboard
+    // (Wristband Summary widget reads settings/global.lastEventDate to find
+    // the current event date) — create/update/delete unchanged.
+    //
+    // settings/employeePortal is a second doc in this same collection,
+    // added for oxa-employee-portal's bike_allowance feature (see
+    // lib/settings.ts there) — kept separate from `global` since that
+    // doc's fields are ticket-app-specific and already field-locked to
+    // isStaff(). This one is isPortalManagement()-only.
+    match /settings/{docId} {
+      allow read: if isStaff() || isPortalManagement();
+      allow create: if isAdmin() ||
+                    (docId == 'global' && isStaff() &&
+                     request.resource.data.keys().hasOnly(['lastCaptureDate', 'lastEventDate'])) ||
+                    (docId == 'employeePortal' && isPortalManagement() &&
+                     request.resource.data.keys().hasOnly(['bikeAllowanceRate', 'taskColorLabels']));
+      allow update: if isAdmin() ||
+                    (docId == 'global' && isStaff() &&
+                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastCaptureDate', 'lastEventDate'])) ||
+                    (docId == 'employeePortal' && isPortalManagement() &&
+                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['bikeAllowanceRate', 'taskColorLabels']));
+      allow delete: if isAdmin();
+    }
+
+    // Public Seller Portal (`/seller/[token]`), doc ID = the seller's
+    // `portalToken`. This is a deliberately narrow public *projection* of
+    // a seller (see SellerPortal in lib/types.ts for the full rationale) —
+    // NOT the real `sellers/{sellerId}` doc, because Firestore rules can't
+    // redact individual fields on read, and the real doc has fields
+    // (`notes`, `whatsapp`, `mapsLink`, `isFavorite`, `district`) that
+    // were never meant to be shown back to the seller themselves.
+    //
+    // `get` is public and `list` is explicitly denied: a caller MUST
+    // already have the exact 32-char random token (from their portal
+    // link) to read anything at all — there's no way to enumerate sellers
+    // through this collection. From that one document, the portal learns
+    // `sellerId` (to address its two scoped writes on `sellers`, above)
+    // and `ticketIds` (to `get()` each ticket individually — see `tickets`
+    // above for why that's safe as individual gets but not as a `list`).
+    //
+    // Public writes are scoped exactly like the `sellers` carve-out above:
+    // `needsTickets` and `needsPromoMaterial` can only be set to `true`
+    // ("I need new tickets" / "I need promo material"), `lastConfirmedAt`
+    // can only be set to a timestamp (ticket confirm). Clearing
+    // `needsTickets` and appending to `ticketIds` both happen via the
+    // authenticated Issue flow; clearing `needsPromoMaterial` happens via
+    // the profile's Dismiss button or SellerForm's manual checkbox — all
+    // already covered by the staff OR.
+    match /sellerPortals/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow create, delete: if isAdmin() || isSalesAgent();
+      allow update: if isAdmin() || isSalesAgent() ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['needsTickets']) &&
+                     request.resource.data.needsTickets == true) ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['needsPromoMaterial']) &&
+                     request.resource.data.needsPromoMaterial == true) ||
+                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastConfirmedAt']) &&
+                     request.resource.data.lastConfirmedAt is timestamp);
+    }
+
+    // ---- OXA Poster Tour (separate app, same Firebase project) ----
+    // See github.com/OXA-Phangan/oxa-poster-tour and this repo's
+    // poster-round-build-spec.md. Gated to isPosterCrew() (defined near
+    // isStaff() above) — field crew via the `posterCrew` custom claim,
+    // management via the two fixed known addresses — not open to every
+    // signed-in Google account, since this shares a Firestore project
+    // with live ticket-sale production data.
+
+    // The single shared "which round is everyone working right now"
+    // pointer (lib/round-meta.ts in oxa-poster-tour) — whoever confirms a
+    // new event-date combination writes it.
+    // `read` also grants oxa-employee-portal's management dashboard (Poster
+    // Tour live-progress widget) — write stays isPosterCrew()-only, that
+    // widget never writes here.
+    match /posterRoundMeta/{docId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+      allow write: if isPosterCrew();
+    }
+
+    // Shared, general-purpose calendar collection — NOT poster-tour-
+    // specific (generic field names: date/label/status/completedAt), even
+    // though the Poster Tour is its only writer today. Curated,
+    // non-weekly event dates, a stored replacement for that app's old
+    // "next 4 Fridays" generator — real party nights aren't weekly.
+    // Seeded/topped-up out-of-band (Admin SDK / client-SDK script,
+    // oxa-poster-tour/scripts/seed-event-dates.js) until an admin UI or a
+    // real HR-app Calendar module exists — this collection is intended to
+    // become that module's data source too, at which point this app's own
+    // event-handling should migrate to read from it as well (deliberately
+    // NOT done as part of adding this collection — see PROGRESS.md).
+    // `completedAt` is set by whichever Poster Tour crew/management client
+    // is open when every seller in a round reaches a final status
+    // (oxa-poster-tour/lib/round-meta.ts) — its picker hides an event once
+    // `read` also grants oxa-employee-portal's management dashboard (the
+    // Finanzen widget's "group Bills by nearest event" view and its bills
+    // breakdown page) — same "read also grants the Portal dashboard" shape
+    // as posterRoundMeta/sellerStatus/wristbandRecords/settings below;
+    // write stays isPosterCrew()-only, the Portal never writes here.
+    match /events/{eventId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+      allow write: if isPosterCrew();
+    }
+
+    // Round-scoped seller status (photo/closed/declined + lock).
+    // `expireAt` is set on the OLD round's docs when a NEWER round is
+    // confirmed; a Firestore TTL policy on that field deletes the doc 7
+    // days later (configured manually in the Firebase console — Claude
+    // Code can't do this directly, see oxa-poster-tour/README.md).
+    // `read` also grants oxa-employee-portal's management dashboard (Poster
+    // Tour live-progress widget), same reason as posterRoundMeta above.
+    match /posterRounds/{roundKey}/sellerStatus/{sellerId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+      allow create, update: if isPosterCrew();
+      allow delete: if isPosterCrew(); // "Reset this event's progress" (management-only in the app's own UI)
+    }
+
+    // Group F — ongoing field/management back-and-forth on one hotel entry
+    // (e.g. "where exactly is this location?"), independent of Group E's
+    // Decline/Feedback task flow. Same shape as taskInstances/{id}/comments
+    // below: immutable once posted (except textTranslations, the on-demand
+    // translation cache — see oxa-poster-tour/components/TranslateButton.tsx),
+    // authorUid/createdAt server-verified. Read matches the parent
+    // sellerStatus doc's own read grant exactly.
+    match /posterRounds/{roundKey}/sellerStatus/{sellerId}/comments/{commentId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+      allow create: if (isPosterCrew() || isPortalManagement()) &&
+                    request.resource.data.authorUid == request.auth.uid &&
+                    request.resource.data.createdAt is timestamp &&
+                    request.resource.data.createdAt > request.time - duration.value(5, 'm') &&
+                    request.resource.data.createdAt < request.time + duration.value(5, 'm');
+      allow update: if (isPosterCrew() || isPortalManagement()) &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['textTranslations']) &&
+                    request.resource.data.textTranslations is map;
+      allow delete: if false;
+    }
+
+    // Non-sequential Misc Poster Log (lamp posts, taxis, vinyl banner date
+    // changes) — see oxa-poster-tour/lib/misc-log.ts. Entries are immutable
+    // once submitted (no edit/delete from the client) except `reviewStatus`,
+    // which Group C/E's Carousel Approve/Decline flow sets via
+    // setMiscLogReviewStatus() — same narrow diff().affectedKeys() carve-out
+    // pattern as textTranslations on comments below. `expireAt` is set by
+    // the same expireRound() that stamps sellerStatus above, so entries
+    // expire on the same 7-day round TTL (its own `miscLog` collection-group
+    // TTL policy — see oxa-poster-tour/README.md).
+    match /posterRounds/{roundKey}/miscLog/{entryId} {
+      allow read, create: if isPosterCrew();
+      allow update: if isPosterCrew() &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reviewStatus']);
+      allow delete: if false;
+    }
+
+    // Group F, miscLog side — identical shape to the sellerStatus comments
+    // block above, including the textTranslations update exception.
+    match /posterRounds/{roundKey}/miscLog/{entryId}/comments/{commentId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+      allow create: if (isPosterCrew() || isPortalManagement()) &&
+                    request.resource.data.authorUid == request.auth.uid &&
+                    request.resource.data.createdAt is timestamp &&
+                    request.resource.data.createdAt > request.time - duration.value(5, 'm') &&
+                    request.resource.data.createdAt < request.time + duration.value(5, 'm');
+      allow update: if (isPosterCrew() || isPortalManagement()) &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['textTranslations']) &&
+                    request.resource.data.textTranslations is map;
+      allow delete: if false;
+    }
+
+    // collectionGroup() read grants for sellerStatus/miscLog — additive,
+    // read-only, alongside (not replacing) the nested posterRounds/{roundKey}/...
+    // blocks above. A nested match only ever covers direct subcollection
+    // access under a KNOWN roundKey; it does NOT authorize a
+    // collectionGroup() query spanning every round, which needs its own
+    // explicit rule using the {path=**} recursive wildcard — confirmed via
+    // Firestore's own docs after "Missing or insufficient permissions" on
+    // oxa-poster-tour's Timeline feature turned out to have nothing to do
+    // with indexes at all (every index-focused theory that session was a
+    // red herring). All write permissions stay exactly as declared in the
+    // nested blocks above — these two blocks are read-only.
+    match /{path=**}/sellerStatus/{sellerId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+    }
+    match /{path=**}/miscLog/{entryId} {
+      allow read: if isPosterCrew() || isPortalManagement();
+    }
+
+    // Permanent decline-follow-up tracker, survives round expiry.
+    match /posterFollowUps/{sellerId} {
+      allow read, create, update: if isPosterCrew();
+      allow delete: if false; // never deleted — resolved via the `resolved` flag only
+    }
+
+    // Persistent field-report tracker (damaged vinyl banners, torn/covered
+    // posters, bike problems, etc.) — see oxa-poster-tour/lib/reports.ts.
+    // Unlike posterFollowUps (crew can also resolve) and miscLog (immutable
+    // once submitted), this is a new split: crew can only create/read,
+    // resolving (the `update`) is management-only. Not round-scoped, no
+    // expireAt, no delete — a permanent record, same as posterFollowUps.
+    match /posterReports/{reportId} {
+      allow read, create: if isPosterCrew();
+      allow update: if isPosterManagement();
+      allow delete: if false;
+    }
+
+    // ---- OXA Employee Portal (separate app, same Firebase project) ----
+    // Time-tracking check-in/out records — see oxa-employee-portal/lib/
+    // time-sessions.ts. Permanent record (payroll-relevant), no expireAt,
+    // no TTL, no delete path — same "keep forever" precedent as
+    // posterReports above. The one exception: checkIn/checkOutPhotoUrl
+    // (Storage paths for the required identity selfies) are cleared back
+    // to null 7 days after capture by a scheduled Cloud Function (see
+    // oxa-poster-tour/functions/index.js) — the doc itself is never
+    // deleted, only those two fields, and that function runs under the
+    // Admin SDK so it doesn't go through these rules at all.
+    //
+    // Status lifecycle: "open" (currently checked in) moves to either
+    // "confirmed" directly (a normal checkout, done live via the Check
+    // Out button while the session is still open — no review needed, but
+    // only within a recent window — see the update rule below) or
+    // "pending" (a checkout time entered retroactively for a session left
+    // open from a previous day, e.g. a missed checkout — needs management
+    // review before it's final). Management can only move "pending" ->
+    // "confirmed"; there is no path for an employee to self-confirm a
+    // pending session, and no path for anyone to move a doc backward out
+    // of "confirmed".
+    match /timeSessions/{sessionId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() && resource.data.uid == request.auth.uid);
+
+      // checkIn must be within ~5 minutes of the server's own clock
+      // (request.time) — a client can't backdate/postdate a session by
+      // sending an arbitrary checkIn timestamp. Also pins the doc's
+      // initial shape (checkOut/checkOutPhotoUrl null, breaks empty) so a
+      // create can't plant pre-filled state. checkInPhotoUrl is required
+      // (a check-in selfie, see oxa-employee-portal/lib/storage.ts) and,
+      // unlike checkOutPhotoUrl, is never listed in the update rule below
+      // — it's set once here and can never change afterward (the only
+      // thing that ever clears it back to null is the scheduled cleanup
+      // Cloud Function, which runs under the Admin SDK and bypasses these
+      // rules entirely).
+      allow create: if isEmployeePortalAccess() &&
+                    request.resource.data.uid == request.auth.uid &&
+                    request.resource.data.status == "open" &&
+                    request.resource.data.checkOut == null &&
+                    request.resource.data.checkOutPhotoUrl == null &&
+                    request.resource.data.checkInPhotoUrl is string &&
+                    request.resource.data.breaks == [] &&
+                    request.resource.data.checkIn is timestamp &&
+                    request.resource.data.checkIn > request.time - duration.value(5, 'm') &&
+                    request.resource.data.checkIn < request.time + duration.value(5, 'm');
+
+      allow update: if
+        (isEmployeePortalAccess() &&
+         resource.data.uid == request.auth.uid &&
+         resource.data.status == "open" &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['breaks', 'checkOut', 'checkOutPhotoUrl', 'status']) &&
+         (
+           (request.resource.data.status == "open" &&
+            request.resource.data.checkOutPhotoUrl == null) ||
+           // Missed/retroactive checkout — no photo required. A selfie
+           // taken "now" wouldn't correspond to the actual (past) checkout
+           // moment being entered, and this path already gets a human
+           // check (management must Confirm it before it's final).
+           (request.resource.data.status == "pending" &&
+            request.resource.data.checkOutPhotoUrl == null) ||
+           // Self-confirm (live checkout) requires a checkout selfie, and
+           // is only allowed for a recent (same-shift) checkout —
+           // checkIn must be within the last 20 hours of the request. A
+           // crafted request against a stale, multi-day-old open session
+           // can't self-confirm this way; it can only be submitted as
+           // "pending", which still requires a management Confirm. Rules
+           // have no timezone-aware calendar-day accessor, so this is a
+           // rolling window rather than literal "same calendar day" —
+           // 20h comfortably covers a normal shift (including one
+           // crossing midnight) while still catching anything actually
+           // stale.
+           (request.resource.data.status == "confirmed" &&
+            request.resource.data.checkOutPhotoUrl is string &&
+            request.time < resource.data.checkIn + duration.value(20, 'h'))
+         )) ||
+        // `breaks` is optional here (confirmSession only includes it when
+        // findInvalidBreaks flagged something to strip) — same trust level
+        // as `checkOut`, no content validation, since this is management
+        // fixing up data it already has full read access to review.
+        (isPortalManagement() &&
+         resource.data.status == "pending" &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkOut', 'breaks']) &&
+         request.resource.data.status == "confirmed") ||
+        // Decline (oxa-employee-portal/lib/time-sessions.ts's declineSession)
+        // — an obviously-wrong retroactive checkout, reverted to "open"
+        // rather than a new terminal status, so the employee is sent back
+        // into the same MissedCheckoutPrompt flow to resubmit. checkOut/
+        // checkOutPhotoUrl pinned back to null (their create-time values);
+        // breaks is left unvalidated here, same trust level the employee's
+        // own "open" branch above already gives that field.
+        (isPortalManagement() &&
+         resource.data.status == "pending" &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkOut', 'checkOutPhotoUrl', 'breaks']) &&
+         request.resource.data.status == "open" &&
+         request.resource.data.checkOut == null &&
+         request.resource.data.checkOutPhotoUrl == null);
+
+      allow delete: if false;
+    }
+
+    // ---- OXA Employee Portal: self-registration (separate app, same Firebase project) ----
+    // See oxa-employee-portal/lib/employees.ts. Permanent HR/identity record
+    // (needed for visa purposes) — no expireAt, no TTL, same "keep forever"
+    // precedent as posterReports/timeSessions above. Doc ID is the Firebase
+    // Auth uid (created on first sign-in, before any custom claim exists —
+    // that's the whole point of this collection).
+    //
+    // Status lifecycle: "pending_review" (self-registered, awaiting
+    // management) -> "active" (management approved — a Cloud Function
+    // watching this transition, oxa-poster-tour/functions/index.js's
+    // onEmployeeActivated, grants the employeePortalAccess custom claim
+    // automatically). There is no "declined" status: a decline deletes the
+    // doc entirely (see `allow delete` below) rather than transitioning
+    // it — the person can simply re-register from scratch.
+    match /employees/{uid} {
+      allow read: if isPortalManagement() || (isSignedIn() && request.auth.uid == uid);
+
+      // Only the signed-in owner can create their own doc, and only in the
+      // initial "pending_review" shape — every management-filled-in field
+      // (startDate/position/hasAccommodation/reviewedBy/reviewedAt) must be
+      // null at create, same "pin the doc's initial shape" principle as
+      // timeSessions' create rule above. submittedAt must be the server's
+      // own clock (within ~5 minutes), same bound as timeSessions' checkIn,
+      // so a client can't backdate a submission.
+      allow create: if isSignedIn() &&
+                    request.auth.uid == uid &&
+                    request.resource.data.uid == uid &&
+                    request.resource.data.email == request.auth.token.email &&
+                    request.resource.data.status == "pending_review" &&
+                    request.resource.data.nickName is string &&
+                    request.resource.data.fullName is string &&
+                    request.resource.data.birthDate is string &&
+                    request.resource.data.nationality in ["thai", "burmese"] &&
+                    request.resource.data.selfiePhotoUrl is string &&
+                    request.resource.data.idDocumentPhotoUrl is string &&
+                    request.resource.data.startDate == null &&
+                    request.resource.data.positions == [] &&
+                    request.resource.data.employmentType == null &&
+                    request.resource.data.hasAccommodation == null &&
+                    request.resource.data.reviewedBy == null &&
+                    request.resource.data.reviewedAt == null &&
+                    request.resource.data.submittedAt is timestamp &&
+                    request.resource.data.submittedAt > request.time - duration.value(5, 'm') &&
+                    request.resource.data.submittedAt < request.time + duration.value(5, 'm');
+
+      // Management-only: filling in the review fields and/or activating.
+      allow update: if isPortalManagement();
+
+      // Decline path — deletes the doc entirely (not a status transition).
+      // oxa-poster-tour/functions/index.js's onEmployeeDeleted Cloud
+      // Function (Admin SDK, bypasses these rules) deletes the two Storage
+      // photos as a result of this delete — no client Storage delete needed.
+      allow delete: if isPortalManagement();
+    }
+
+    // One employee's manually-set open-task display order (drag-and-drop
+    // reordering in the Task Manager, oxa-employee-portal's
+    // app/management/aufgaben/page.tsx). Doc id == the employee's own uid,
+    // same convention as employees/{uid} itself. Management-only write
+    // (they're the ones dragging); the owning employee can read their own
+    // doc so their Aufgaben list can sort by it, matching
+    // vacationAdjustments' owner-or-management read shape just above.
+    match /employeeTaskOrder/{uid} {
+      allow read: if isPortalManagement() || (isEmployeePortalAccess() && request.auth.uid == uid);
+      allow write: if isPortalManagement();
+    }
+
+    // Vacation ledger — manual management corrections to an employee's
+    // computed balance (carried-over days, one-off deductions/additions).
+    // See oxa-employee-portal/lib/vacation.ts. Create is management-only,
+    // but read also allows the owning employee themselves — the Holiday
+    // request form shows the employee their own live balance (entitlement
+    // - taken + adjustments) before they submit, which means the client
+    // needs to read this subcollection for `request.auth.uid == uid`, not
+    // just management. Permanent, no delete (a correction is fixed by
+    // adding an offsetting entry, not editing/removing history).
+    match /employees/{uid}/vacationAdjustments/{adjustmentId} {
+      allow read: if isPortalManagement() || (isEmployeePortalAccess() && request.auth.uid == uid);
+      allow create: if isPortalManagement();
+      allow update, delete: if false;
+    }
+
+    // Same shape/permission convention as vacationAdjustments directly
+    // above — a permanent, management-only, auditable ledger entry, this
+    // time crediting extra minutes to a specific day's DISPLAYED net work
+    // time (SessionRow's "Net Duration" line) rather than a vacation
+    // balance. Created at approval time for the late_checkin/
+    // additional_work_time Anträge types (see oxa-employee-portal/
+    // lib/requests.ts's approveLateCheckinRequest/
+    // approveAdditionalWorkTimeRequest) — visibility/record-keeping only,
+    // Finance/payroll never reads this collection. Read also allows the
+    // owning employee, same reasoning as vacationAdjustments (they should
+    // be able to see why their own displayed hours changed).
+    match /employees/{uid}/timeAdjustments/{adjustmentId} {
+      allow read: if isPortalManagement() || (isEmployeePortalAccess() && request.auth.uid == uid);
+      allow create: if isPortalManagement();
+      allow update: if false;
+      // Narrow, deliberate exception to this collection's otherwise
+      // fully-immutable convention (matching vacationAdjustments) —
+      // needed so oxa-employee-portal/lib/requests.ts's
+      // reverseLateCheckinOrWorkTimeApproval can delete a credit entry
+      // when its approval is reversed. Finance/payroll never reads this
+      // collection (see this block's own comment above), so there's
+      // nothing downstream a delete here could desync — unlike requests'
+      // own appliedToPayroll-gated fields, no further narrowing is
+      // needed, same "management-only, matching every other write
+      // permission on this collection" precedent as taskInstances' own
+      // first-ever delete exception.
+      allow delete: if isPortalManagement();
+    }
+
+    // FCM push-notification tokens (see oxa-employee-portal/lib/
+    // push-notifications.ts and lib/types.ts's FcmTokenDoc). Doc ID is the
+    // raw token string, so an employee registering the same device twice
+    // is an idempotent upsert, not a duplicate. Owner-write-only — the two
+    // Cloud Functions that actually send pushes
+    // (sendMissedCheckoutReminders/onRequestReviewed, oxa-poster-tour/
+    // functions/index.js) run under the Admin SDK and bypass these rules
+    // entirely, so no management write/read grant is needed for sending;
+    // read is still granted to management for debugging/support.
+    match /employees/{uid}/fcmTokens/{tokenId} {
+      allow read: if isPortalManagement() || (isEmployeePortalAccess() && request.auth.uid == uid);
+      allow create, update, delete: if isEmployeePortalAccess() && request.auth.uid == uid;
+    }
+
+    // ---- OXA Employee Portal: Anträge (leave/expense requests) ----
+    // See oxa-employee-portal/lib/requests.ts. Permanent record, no
+    // expireAt/TTL, no delete path — same "keep forever" precedent as
+    // employees/timeSessions above. One doc shape covers all eight types
+    // (sick/holiday/move_day_off/unpaid_leave/advance/receipt/
+    // late_checkin/additional_work_time); only the fields relevant to
+    // `type` are ever populated by the client. late_checkin and
+    // additional_work_time never touch this doc's status-adjacent fields
+    // any differently than the other six — their actual credit lands in
+    // the separate employees/{uid}/timeAdjustments ledger above, created
+    // by lib/requests.ts's dedicated approve functions at approval time,
+    // so no change to the `update` branch below was needed for them.
+    //
+    // Deliberately NOT exhaustively pinning which type-specific fields
+    // must be null per `type` here (unlike employees'/timeSessions' create
+    // rules) — with eight types this would roughly triple the rule's size,
+    // and unlike those two collections, every request here still requires
+    // a human management Confirm/Decline before it has any effect (no
+    // self-service auto-approval path exists at all), so a hand-crafted
+    // malformed write can't bypass review either way.
+    match /requests/{requestId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() && resource.data.uid == request.auth.uid);
+
+      allow create: if isEmployeePortalAccess() &&
+                    request.resource.data.uid == request.auth.uid &&
+                    request.resource.data.status == "pending" &&
+                    request.resource.data.type in
+                      ["sick", "holiday", "move_day_off", "unpaid_leave", "advance", "receipt",
+                       "late_checkin", "additional_work_time", "general_request"] &&
+                    request.resource.data.reviewedBy == null &&
+                    request.resource.data.reviewedAt == null &&
+                    request.resource.data.submittedAt is timestamp &&
+                    request.resource.data.submittedAt > request.time - duration.value(5, 'm') &&
+                    request.resource.data.submittedAt < request.time + duration.value(5, 'm');
+
+      // Four branches. First two: management-only, unchanged — the
+      // original approve/decline transition (repaymentPlan added so an
+      // advance approval can set its installment plan in the same write
+      // as `status`, see oxa-employee-portal/lib/requests.ts's
+      // approveAdvanceRequest), and an already-approved advance's/receipt's
+      // consumption-tracking fields (`status` itself never changes here).
+      // Receipts no longer get swept into payroll close (see
+      // oxa-employee-portal/lib/payroll.ts's computeEmployeeMonthDraft
+      // comment) — `paidAt`/`paidBy` are that branch's replacement
+      // reimbursement-tracking write instead, set once via
+      // markReceiptPaid from the request detail page's "Mark as Paid"
+      // button. `appliedToPayroll`/`appliedInMonth` stay in this same
+      // allowlist for advances/bike_allowance, which still do close
+      // through lib/payroll.ts's gatherAdvancesToApply/gatherBikeAllowanceToApply.
+      // Third: new — "Reverse Approval" (oxa-employee-portal/lib/requests.ts's
+      // reverseApproval/reverseLateCheckinOrWorkTimeApproval), an
+      // approved -> pending transition for a completely fresh
+      // re-decision. Same type-aware safeguard as canReverseApproval()'s
+      // client-side mirror, enforced here as the real check: blocked
+      // once an advance/bike_allowance's appliedToPayroll is true
+      // (already swept into a closed, immutable payrollEntries doc —
+      // reversing now wouldn't undo that) or a receipt's paidAt is set
+      // (already reimbursed). late_checkin/additional_work_time are
+      // always allowed here — their employees/{uid}/timeAdjustments
+      // ledger entry (see approveLateCheckinRequest/
+      // approveAdditionalWorkTimeRequest) is deleted separately, in the
+      // same batch, under that collection's own rule block above; it's
+      // purely informational (Finance/payroll never reads it), so there's
+      // nothing here for appliedToPayroll/paidAt to guard against.
+      // Fourth: caching an on-demand translation (see
+      // oxa-employee-portal/components/TranslateButton.tsx). This
+      // collection previously had NO employee-update path at all
+      // (employees could only create, never update, their own request) —
+      // this is a genuinely new grant, scoped narrowly to translations
+      // only, by whoever can already read the doc (matching the "read
+      // access already isn't status-gated either" reasoning the
+      // taskInstances rule above now also uses).
+      allow update: if
+        (isPortalManagement() &&
+         (
+           (resource.data.status == "pending" &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'reviewedBy', 'reviewedAt', 'repaymentPlan']) &&
+            request.resource.data.status in ["approved", "declined"]) ||
+           (resource.data.status == "approved" &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['appliedToPayroll', 'appliedInMonth', 'repaymentPlan', 'paidAt', 'paidBy']) &&
+            request.resource.data.status == "approved") ||
+           (resource.data.status == "approved" &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'reviewedBy', 'reviewedAt', 'repaymentPlan']) &&
+            request.resource.data.status == "pending" &&
+            request.resource.data.reviewedBy == null &&
+            request.resource.data.reviewedAt == null &&
+            request.resource.data.repaymentPlan == null &&
+            !((resource.data.type == "advance" || resource.data.type == "bike_allowance") &&
+              resource.data.appliedToPayroll == true) &&
+            !(resource.data.type == "receipt" && resource.data.paidAt != null))
+         )) ||
+        ((isPortalManagement() || (isEmployeePortalAccess() && resource.data.uid == request.auth.uid)) &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['explanationTranslations', 'reasonTranslations']) &&
+         request.resource.data.explanationTranslations is map &&
+         request.resource.data.reasonTranslations is map);
+
+      allow delete: if false;
+    }
+
+    // ---- OXA Employee Portal: Finanzen (payroll) ----
+    // See oxa-employee-portal/lib/payroll.ts and lib/types.ts's
+    // PayrollEntryDoc/PayrollAdjustmentDoc. Permanent, no delete —
+    // corrections happen via the adjustments subcollection below, never by
+    // editing this doc. Deterministic doc ID (uid_month, set client-side
+    // in lib/payroll.ts's payrollEntryId) means `allow create` only ever
+    // fires for a genuinely new employee+month — combined with `allow
+    // update, delete: if false`, a second close attempt for the same
+    // employee+month is rejected automatically, no separate check needed.
+    match /payrollEntries/{entryId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() && resource.data.uid == request.auth.uid);
+      allow create: if isPortalManagement();
+      allow update, delete: if false;
+    }
+
+    // Post-close corrections — identical shape/purpose to
+    // vacationAdjustments above: a logged entry, never an overwrite of the
+    // immutable parent. Read check is a guarded get() on the parent (same
+    // pattern this file's taskInstances/comments block already uses) since
+    // an employee's own payslip should reflect corrections too, and
+    // entryId can't be split apart in rules to recover uid directly.
+    match /payrollEntries/{entryId}/adjustments/{adjustmentId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() &&
+                   get(/databases/$(database)/documents/payrollEntries/$(entryId)).data.uid == request.auth.uid);
+      allow create: if isPortalManagement();
+      allow update, delete: if false;
+    }
+
+    // ---- OXA Employee Portal: Aufgaben (Tasks) ----
+    // See oxa-employee-portal/lib/tasks.ts and lib/types.ts's
+    // TaskTemplateDoc/TaskInstanceDoc/TaskCommentDoc. Templates hold
+    // recurrence rules for ROUTINE tasks only; one-time tasks are created
+    // directly as a taskInstances doc with templateId == null.
+
+    match /taskTemplates/{templateId} {
+      allow read, write: if isPortalManagement();
+    }
+
+    // Employees can read/act on an instance if it's assigned to their uid,
+    // eligible via one of their positions, or they're the one who completed
+    // it.
+    //
+    // History, because this has been wrong twice already:
+    // (1) Position matching originally used a get() lookup against the
+    // caller's own employees doc (callerPositions(), removed 2026-09-15) —
+    // Firestore caps document-access calls at 10 per query rule evaluation,
+    // and that get() is re-evaluated per candidate document for a LIST
+    // query's potential result set, not deduplicated. Any position whose
+    // cumulative task history crossed 10 matching taskInstances — trivial
+    // for any position tied to a routine template, since those generate a
+    // new instance every day forever — made the ENTIRE byPosition query in
+    // oxa-employee-portal/lib/tasks.ts's useTaskInstancesForEmployee
+    // permanently fail with permission-denied. Confirmed live: Canna Moon
+    // Clerk had 471 matching taskInstances, Sales Agent/Assistant
+    // Manager/etc. had 22.
+    // (2) The 2026-09-15 fix for (1) replaced the get() with
+    // request.auth.token.get('positions', []).hasAny(data.assignedPositions)
+    // — reading the position list from a custom claim instead. This passed
+    // every structural check (zero get() calls, a synthetic single-document
+    // rules-engine test) but STILL failed in production, confirmed via
+    // taskListenerErrorLogs entries from two real employees the next day.
+    // Root cause, confirmed via Firebase's own documentation and the
+    // official Rules query-validation reference: Firestore's `list`/query
+    // rule evaluation does NOT read real document data to decide whether to
+    // allow a request — it statically proves, from the query's own literal
+    // `where` filter values alone, that every possible result would satisfy
+    // the rule. The only documented, provable pattern is a query's literal
+    // filter value matching request.auth.uid directly (exactly what
+    // assignedEmployeeUids below already does, successfully, and always
+    // has). There is no supported way to make a query provable against an
+    // arbitrary custom claim, especially one compared via .hasAny() — no
+    // matter how the rule or the get() call is worded, a token-claim
+    // comparison can never be the thing that makes a list request provable.
+    // This also explains why Min's Start button failed on the write side:
+    // autoPauseActiveTasksForBreak (lib/tasks.ts) runs the identical
+    // byPosition query as a one-shot getDocs() before every Start — same
+    // root cause, second call site.
+    //
+    // Fix (2026-09-16): stop comparing against the token entirely.
+    // positionEligibleUids is a denormalized field on the document itself —
+    // "every currently-active employee whose positions intersect
+    // assignedPositions," kept in sync server-side by
+    // oxa-poster-tour/functions/index.js's onTaskInstanceCreated (at
+    // creation) and syncPositionEligibleTaskUids (when an employee's
+    // positions change later) — queried the exact same proven way
+    // assignedEmployeeUids already is: array-contains against the caller's
+    // own uid, the one pattern Firestore actually supports. data.get(...)
+    // defaults safely in case the field hasn't landed yet on a doc the
+    // backfill script missed or a brand-new doc mid-flight before its
+    // creation trigger has run (get('positions', []) on the old token
+    // branch defended against the identical class of gap — a bare
+    // .hasAny()/`in` on a genuinely-missing field throws, not falls
+    // through).
+    function isAssignedToInstance(data) {
+      return request.auth.uid in data.assignedEmployeeUids ||
+             request.auth.uid in data.get('positionEligibleUids', []) ||
+             data.completedBy == request.auth.uid;
+    }
+
+    // Permanent record (no expireAt/TTL, no delete path — including the
+    // comment thread) — only taskInstances.proofPhotoUrl expires, cleared
+    // by the scheduled cleanupExpiredTaskProofPhotos Cloud Function
+    // (oxa-poster-tour/functions/index.js), same "field clears, doc never
+    // deleted" shape as timeSessions' photo fields.
+    //
+    // Status lifecycle: "open" -> "pending_confirmation" (employee submits
+    // checklist + proof photo, never able to self-confirm) -> "confirmed"
+    // or "rejected" (management-only transitions). A rejected instance can
+    // be resubmitted by an assigned employee — the employee branch below
+    // accepts a starting status of "open" OR "rejected", both moving
+    // forward through "pending_confirmation" the same way, and always
+    // clears rejectionReason back to null so a resubmit doesn't leave a
+    // stale rejection banner showing.
+    match /taskInstances/{instanceId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() && isAssignedToInstance(resource.data));
+
+      // Management creates instances directly (one-time tasks) — routine
+      // instances are spawned by generateTaskInstances under the Admin
+      // SDK, which bypasses this rule entirely. The employee branch below
+      // is the one exception: a "Report" submission (see
+      // oxa-employee-portal/lib/tasks.ts's submitReportTask) — every
+      // management-owned lifecycle field pinned to its safe initial
+      // value, same employee-creates-a-bounded-doc pattern already used
+      // for timeSessions/employees/requests above, applied here for the
+      // first time. Unassigned (assignedPositions/assignedEmployeeUids
+      // both []) for three of the four categories — management reviews
+      // and assigns manually, never auto-forwarded — EXCEPT
+      // reportCategory "vinyl", auto-assigned directly to Oat (uid
+      // hardcoded below, mirroring submitReportTask's own
+      // VINYL_REPAIR_UID constant — if Oat is ever deactivated/replaced,
+      // update both together or vinyl Report submissions start failing
+      // this check).
+      allow create: if isPortalManagement() ||
+                    (isEmployeePortalAccess() &&
+                     request.resource.data.reportedBy == request.auth.uid &&
+                     request.resource.data.templateId == null &&
+                     request.resource.data.dueDate is string &&
+                     request.resource.data.isRecurring == false &&
+                     request.resource.data.assignedPositions == [] &&
+                     (request.resource.data.reportCategory == "vinyl"
+                       ? request.resource.data.assignedEmployeeUids == ["LuZFayk1cGNR8NigLsF9BmydUQb2"]
+                       : request.resource.data.assignedEmployeeUids == []) &&
+                     request.resource.data.helperUid == null &&
+                     request.resource.data.checklist == [] &&
+                     request.resource.data.status == "open" &&
+                     request.resource.data.startedAt == null &&
+                     request.resource.data.startedBy == null &&
+                     request.resource.data.taskBreaks == [] &&
+                     request.resource.data.completedBy == null &&
+                     request.resource.data.completedAt == null &&
+                     request.resource.data.proofPhotoUrls == [] &&
+                     request.resource.data.rejectionReason == null &&
+                     request.resource.data.reportCategory in ["vinyl", "poster", "flyer", "other"] &&
+                     request.resource.data.locationLink is string &&
+                     request.resource.data.locationLink.size() > 0 &&
+                     request.resource.data.unreadByManagement == true &&
+                     request.resource.data.createdAt is timestamp &&
+                     request.resource.data.createdAt > request.time - duration.value(5, 'm') &&
+                     request.resource.data.createdAt < request.time + duration.value(5, 'm'));
+
+      allow update: if
+        isPortalManagement() ||
+        (isEmployeePortalAccess() &&
+         isAssignedToInstance(resource.data) &&
+         (
+           // "Doing the work" — checklist ticks, start, pause/resume,
+           // submit/resubmit. Gated on status, unchanged from before.
+           (resource.data.status in ["open", "rejected"] &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['checklist', 'status', 'proofPhotoUrls', 'completedBy', 'completedAt', 'rejectionReason',
+                        'startedAt', 'startedBy', 'taskBreaks']) &&
+            (
+              // Still working on it (checklist ticks, start, pause/resume) —
+              // status and the rejection reason both stay exactly as they
+              // were, whether that's "open" or "rejected". A rejected task
+              // can be freely adjusted without resubmitting it.
+              (request.resource.data.status == resource.data.status &&
+               request.resource.data.rejectionReason == resource.data.rejectionReason) ||
+              // Resubmitting via Finish — moves to pending_confirmation and
+              // clears the stale rejection reason in the same write.
+              (request.resource.data.status == "pending_confirmation" &&
+               request.resource.data.rejectionReason == null)
+            )) ||
+           // Caching an on-demand translation (see oxa-employee-portal/
+           // components/TranslateButton.tsx) is a byproduct of reading,
+           // not a work action — deliberately NOT gated on status like the
+           // branch above, since read access itself isn't either (an
+           // employee can translate a "confirmed" task's title just as
+           // well as an "open" one).
+           (request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['titleTranslations', 'descriptionTranslations', 'rejectionReasonTranslations']) &&
+            request.resource.data.titleTranslations is map &&
+            request.resource.data.descriptionTranslations is map &&
+            request.resource.data.rejectionReasonTranslations is map)
+         ));
+
+      // This project's first real delete — management-only, matching
+      // every other write permission on this collection. The comments
+      // subcollection has no cascade-delete trigger (no precedent
+      // anywhere in this codebase) and is left orphaned; it has no read
+      // path once the parent is gone anyway (the comments read rule's
+      // get() on the parent throws when it's missing).
+      allow delete: if isPortalManagement();
+    }
+
+    match /taskInstances/{instanceId}/comments/{commentId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() &&
+                   isAssignedToInstance(get(/databases/$(database)/documents/taskInstances/$(instanceId)).data));
+
+      allow create: if (isPortalManagement() || isEmployeePortalAccess()) &&
+                    request.resource.data.authorUid == request.auth.uid &&
+                    request.resource.data.createdAt is timestamp &&
+                    request.resource.data.createdAt > request.time - duration.value(5, 'm') &&
+                    request.resource.data.createdAt < request.time + duration.value(5, 'm');
+
+      // First-ever mutation path on this collection — otherwise fully
+      // immutable, same no-update/no-delete convention as every other
+      // append-only record in this project. Narrow and explicit on
+      // purpose: exactly one field (textTranslations, the on-demand
+      // translation cache — see oxa-employee-portal/components/
+      // TranslateButton.tsx), by anyone who could already read this
+      // comment (same isAssignedToInstance-via-parent-lookup the read
+      // rule above uses, or management). authorUid/createdAt/text/
+      // voiceUrl/photoUrl all remain permanently unwritable — the exact
+      // hasOnly(['textTranslations']) match (not a broader allow-list)
+      // makes any other field change fail this rule outright.
+      allow update: if
+        (isPortalManagement() ||
+         (isEmployeePortalAccess() &&
+          isAssignedToInstance(get(/databases/$(database)/documents/taskInstances/$(instanceId)).data))) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['textTranslations']) &&
+        request.resource.data.textTranslations is map;
+
+      allow delete: if false;
+    }
+
+    // Diagnostic auto-logger for useTaskInstancesForEmployee's own listener
+    // errors (oxa-employee-portal/lib/tasks.ts, logTaskListenerError) —
+    // added Session 62 because the Session 61 "Yel still broken after the
+    // fix" investigation had no way to get her actual FirestoreError short
+    // of a live screen-share. Self-scoped create-only: an employee can only
+    // ever write a log naming their own uid, never read any log (including
+    // their own — this is diagnostic exhaust for management, not a
+    // user-facing feature), and can never edit/delete one once written,
+    // same permanent-record convention as every other audit-shaped
+    // collection in this ruleset. createdAt must be the literal
+    // serverTimestamp() sentinel (request.time), not a client-supplied
+    // value — nothing here is trusted from the client except which errors
+    // it saw.
+    match /taskListenerErrorLogs/{logId} {
+      allow read: if isPortalManagement();
+      allow create: if isSignedIn() &&
+                    request.resource.data.uid == request.auth.uid &&
+                    request.resource.data.keys().hasOnly(['uid', 'source', 'code', 'message', 'positionsClaim', 'path', 'userAgent', 'createdAt']) &&
+                    request.resource.data.keys().hasAll(['uid', 'source', 'code', 'message', 'createdAt']) &&
+                    request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // ---- OXA Employee Portal: Calendar (Stage 1/2 management, Stage 3 employee) ----
+    // See oxa-employee-portal/lib/calendar.ts and lib/types.ts's
+    // CalendarEntryDoc/CalendarColorDoc. Deliberately separate from the
+    // top-level `events` collection above (the Poster Tour party-night
+    // calendar) — no migration, no cross-link.
+    //
+    // Stage 3 employee read: `visibility` (stored since Stage 1, inert
+    // until now) becomes actually enforced. Four independent ways a
+    // document can be visible to an employee, matching four SEPARATE
+    // client-side queries (oxa-employee-portal/lib/calendar.ts's
+    // useCalendarEntriesForEmployee) rather than one OR'd query — this is
+    // the same list-query provability constraint documented at length on
+    // isAssignedToInstance above (taskInstances' own Session 63 fix):
+    // Firestore's list-request prover can only recognize a query whose
+    // literal where() clause maps onto exactly ONE OR-branch of the rule,
+    // never a claims/get()-based comparison and never a query that doesn't
+    // structurally match a single branch. So every branch here is either a
+    // literal-equality check or an array-contains-on-the-caller's-own-uid
+    // check — nothing else is provable for a list query, full stop.
+    //   1. visibility == "everyone" — literal equality, trivially provable.
+    //   2. caller's uid in assignedEmployeeUids — the already-proven
+    //      taskInstances pattern; also covers an employee's own
+    //      self-created entries (Stage 3 create pins assignedEmployeeUids
+    //      to exactly [creator]).
+    //   3. caller's uid in positionEligibleUids — a NEW denormalized field,
+    //      mirroring taskInstances' own positionEligibleUids exactly
+    //      (same reasoning: a live get()/claims check against
+    //      assignedPositions is not provable for list, only this
+    //      denormalized array-contains is). Resolved server-side by
+    //      oxa-poster-tour/functions/index.js's onCalendarEntryCreated /
+    //      onCalendarEntryAssignedPositionsUpdated, kept in sync on
+    //      employee position changes by the same syncPositionEligibleUids
+    //      helper taskInstances uses (generalized to take a collection
+    //      name, see its own doc comment).
+    //   4. caller's uid in staffingAssigneeUids — a NEW denormalized flat
+    //      array of every non-null staffing[].assignments[].assignedEmployeeUid
+    //      on the entry. Needed because an Event Staffing assignee is NOT
+    //      necessarily in assignedEmployeeUids/assignedPositions at all —
+    //      an event can be staffed entirely through `staffing`, with the
+    //      parent entry's own participants list left empty. Without this
+    //      branch a staffed-but-otherwise-unlisted employee couldn't read
+    //      the entry, and so could never see their own staffing assignment.
+    //      Computed CLIENT-SIDE (unlike positionEligibleUids) — it only
+    //      depends on the write's own `staffing` payload, not other
+    //      employees' data, so there's no reason to round-trip it through a
+    //      Cloud Function — see lib/calendar.ts's
+    //      flattenStaffingAssigneeUids, called wherever `staffing` is
+    //      written (createCalendarEntry/updateCalendarEntry/
+    //      setEntryStaffing/duplicateCalendarEntry).
+    // `.get(field, [])` (not bare field access) on both denormalized
+    // fields defends the same mid-flight gap taskInstances' own
+    // isAssignedToInstance already defends against — a doc read between
+    // its create() landing and its creation trigger completing.
+    function isVisibleCalendarEntry(data) {
+      return data.visibility == "everyone" ||
+             request.auth.uid in data.assignedEmployeeUids ||
+             request.auth.uid in data.get('positionEligibleUids', []) ||
+             request.auth.uid in data.get('staffingAssigneeUids', []);
+    }
+
+    match /calendarEntries/{entryId} {
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() && isVisibleCalendarEntry(resource.data));
+
+      // Stage 3 employee create: a SIMPLIFIED self-entry only — title +
+      // dates/times, nothing else. No type checkboxes, no color, no
+      // participants/visibility picker (the employee IS the sole
+      // participant, pinned below) — see EmployeeCalendarEntryForm.tsx.
+      // Every management-owned/feature field pinned to a value that keeps
+      // this doc indistinguishable in shape from "a plain personal note,"
+      // same employee-creates-a-bounded-doc pattern as taskInstances'
+      // Report branch above.
+      allow create: if isPortalManagement() ||
+                    (isEmployeePortalAccess() &&
+                     request.resource.data.createdBy == request.auth.uid &&
+                     request.resource.data.assignedEmployeeUids == [request.auth.uid] &&
+                     request.resource.data.assignedPositions == [] &&
+                     request.resource.data.visibility == "specific" &&
+                     request.resource.data.isEventDate == false &&
+                     request.resource.data.isLeave == false &&
+                     request.resource.data.createTaskOnSave == false &&
+                     request.resource.data.linkedTaskId == null &&
+                     request.resource.data.colorId == null &&
+                     request.resource.data.staffing == [] &&
+                     request.resource.data.staffingAssigneeUids == [] &&
+                     request.resource.data.title is string &&
+                     request.resource.data.title.size() > 0 &&
+                     request.resource.data.startDate is string &&
+                     request.resource.data.endDate is string &&
+                     request.resource.data.allDay is bool &&
+                     request.resource.data.createdAt is timestamp &&
+                     request.resource.data.createdAt > request.time - duration.value(5, 'm') &&
+                     request.resource.data.createdAt < request.time + duration.value(5, 'm'));
+
+      // Employee edit/delete of their OWN self-entry only — same shape
+      // both BEFORE and AFTER the write (checked on both resource.data and
+      // request.resource.data), so an employee can never use update() to
+      // smuggle staffing/positions onto an entry or turn a plain note into
+      // an Event Date/Leave. A management-created entry that happens to
+      // list this employee's uid is NOT editable/deletable by them —
+      // resource.data.createdBy == request.auth.uid is the gate, not mere
+      // assignment.
+      allow update: if isPortalManagement() ||
+                    (isEmployeePortalAccess() &&
+                     resource.data.createdBy == request.auth.uid &&
+                     resource.data.assignedEmployeeUids == [request.auth.uid] &&
+                     resource.data.assignedPositions == [] &&
+                     resource.data.isEventDate == false &&
+                     resource.data.isLeave == false &&
+                     resource.data.staffing == [] &&
+                     request.resource.data.createdBy == resource.data.createdBy &&
+                     request.resource.data.assignedEmployeeUids == [request.auth.uid] &&
+                     request.resource.data.assignedPositions == [] &&
+                     request.resource.data.visibility == "specific" &&
+                     request.resource.data.isEventDate == false &&
+                     request.resource.data.isLeave == false &&
+                     request.resource.data.createTaskOnSave == false &&
+                     request.resource.data.linkedTaskId == null &&
+                     request.resource.data.colorId == null &&
+                     request.resource.data.staffing == [] &&
+                     request.resource.data.staffingAssigneeUids == [] &&
+                     request.resource.data.title is string &&
+                     request.resource.data.title.size() > 0 &&
+                     request.resource.data.startDate is string &&
+                     request.resource.data.endDate is string &&
+                     request.resource.data.allDay is bool);
+
+      allow delete: if isPortalManagement() ||
+                    (isEmployeePortalAccess() &&
+                     resource.data.createdBy == request.auth.uid &&
+                     resource.data.assignedEmployeeUids == [request.auth.uid] &&
+                     resource.data.assignedPositions == [] &&
+                     resource.data.isEventDate == false &&
+                     resource.data.isLeave == false);
+    }
+    match /calendarColors/{colorId} {
+      // Stage 3: an employee-visible calendarEntries doc can carry a
+      // management-set colorId (e.g. "Public Holiday") — {name, hex} only,
+      // nothing sensitive, so a blanket employee read is fine (same
+      // reasoning as shiftTypes' employee read grant just below).
+      allow read: if isPortalManagement() || isEmployeePortalAccess();
+      allow write: if isPortalManagement();
+    }
+
+    // ---- OXA Employee Portal: Canna Moon Clerk shift system (Calendar Stage 2) ----
+    // Management plans per-employee-per-day shifts on a roster; the employee
+    // Aufgaben page reads each employee's OWN assignment silently to filter
+    // which routine task instances they see. Management-write throughout,
+    // plus the two employee-read branches that visibility feature needs —
+    // same management-write / employee-own-read split as taskInstances.
+    // See oxa-employee-portal/lib/shifts.ts and lib/types.ts's
+    // ShiftTypeDoc / ShiftAssignmentDoc.
+    match /shiftTypes/{shiftTypeId} {
+      // Employees need the time windows for the check-in-time fallback.
+      allow read: if isEmployeePortalAccess();
+      allow write: if isPortalManagement();
+    }
+    match /shiftAssignments/{assignmentId} {
+      // Doc id is `${uid}_${YYYY-MM-DD}` — a Firebase Auth uid and an ISO date
+      // each contain no '_', so split('_')[0] is exactly the uid. Checked on
+      // the id, not resource.data, so an employee can also read "no
+      // assignment exists" (a get() on a day with no doc).
+      allow read: if isPortalManagement() ||
+                  (isEmployeePortalAccess() && assignmentId.split('_')[0] == request.auth.uid);
+      allow write: if isPortalManagement();
+    }
+    // ---- OXA Flyer Tours (separate app, same Firebase project) ----
+    // See github.com/OXA-Phangan/oxa-flyer-tours. Short-term flyer
+    // volunteers (max ~2 weeks), never entered into `employees` — access
+    // is a per-volunteer, unique-link token (flyerVolunteers/{token}),
+    // not Google Sign-In like every other app above. Admin access uses
+    // a distinct `flyerAdmin` custom claim (isFlyerAdmin() below) rather
+    // than the shared isAdmin()/isPortalManagement() helpers above, since
+    // this is a deliberately separate access domain.
+    function isFlyerAdmin() {
+      return isSignedIn() && request.auth.token.flyerAdmin == true;
+    }
+
+    match /flyerRegistrations/{regId} {
+      allow create: if request.resource.data.status == "pending"
+                    && request.resource.data.name is string
+                    && request.resource.data.checkInDate is string
+                    && request.resource.data.checkOutDate is string;
+      allow read, update, delete: if isFlyerAdmin();
+    }
+
+    match /flyerRoutes/{routeId} {
+      allow get, list: if true;
+      allow create, update, delete: if isFlyerAdmin();
+    }
+
+    match /flyerVolunteers/{token} {
+      allow get: if true;
+      allow list: if isFlyerAdmin();
+      allow create: if isFlyerAdmin();
+      allow update: if isFlyerAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["pendingStayEdit", "hasPendingStayEdit", "onBreak"])
+      );
+      allow delete: if isFlyerAdmin();
+
+      match /shifts/{shiftId} {
+        allow get, list: if true;
+        allow write: if isFlyerAdmin();
+      }
+    }
+
+    match /flyerTourProgress/{progressId} {
+      allow get, write: if true;
+      allow list: if isFlyerAdmin();
+    }
+
+    match /flyerProofs/{proofId} {
+      allow create: if request.resource.data.volunteerId is string;
+      allow get: if true;
+      allow list, delete: if isFlyerAdmin();
+    }
+
+    match /flyerChatThreads/{token} {
+      allow get, update: if true;
+      allow list, create: if isFlyerAdmin();
+      match /messages/{messageId} {
+        allow get, list, create: if true;
+      }
+    }
+
+    match /flyerGroupMessages/{messageId} {
+      allow get, list, create: if true;
+      allow update, delete: if isFlyerAdmin();
+    }
+
+    match /flyerSupplyReports/{reportId} {
+      allow create: if request.resource.data.volunteerId is string;
+      allow get, list, update: if isFlyerAdmin();
+    }
+  }
+}
