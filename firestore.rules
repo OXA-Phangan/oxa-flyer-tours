@@ -1340,7 +1340,10 @@ service cloud.firestore {
     // than the shared isAdmin()/isPortalManagement() helpers above, since
     // this is a deliberately separate access domain.
     function isFlyerAdmin() {
-      return isSignedIn() && request.auth.token.flyerAdmin == true;
+      return isSignedIn() &&
+             (request.auth.token.flyerAdmin == true ||
+              request.auth.token.email.lower() in
+                ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com']);
     }
 
     match /flyerRegistrations/{regId} {

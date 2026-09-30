@@ -200,7 +200,10 @@ service firebase.storage {
     // isPortalManagement() above. Keep in sync with firestore.rules'
     // isFlyerAdmin() if the claim name ever changes.
     function isFlyerAdmin() {
-      return isSignedIn() && request.auth.token.flyerAdmin == true;
+      return isSignedIn() &&
+             (request.auth.token.flyerAdmin == true ||
+              request.auth.token.email.lower() in
+                ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com']);
     }
 
     // Passport photos — path shape: flyerPassports/{token}/passport.jpg
