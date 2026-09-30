@@ -452,6 +452,16 @@ service cloud.firestore {
     match /{path=**}/miscLog/{entryId} {
       allow read: if isPosterCrew() || isPortalManagement();
     }
+    // collectionGroup() read for timeAdjustments — management's Time
+    // Tracking History + TimeTrackingWidget query every employee's credits
+    // by date range (oxa-employee-portal/lib/time-adjustments.ts
+    // useTimeAdjustmentsForDateRange), which the nested
+    // employees/{uid}/timeAdjustments block can't authorize (same finding
+    // as sellerStatus/miscLog above). Read-only; writes stay as declared in
+    // the nested block.
+    match /{path=**}/timeAdjustments/{adjustmentId} {
+      allow read: if isPortalManagement();
+    }
 
     // Permanent decline-follow-up tracker, survives round expiry.
     match /posterFollowUps/{sellerId} {
@@ -496,6 +506,72 @@ service cloud.firestore {
       allow read: if isPortalManagement() ||
                   (isEmployeePortalAccess() && resource.data.uid == request.auth.uid);
 
+      // ---- `breaks` validation for employee updates (2026-09-28) ----
+      // Rules can't loop over a list, so instead of validating every entry
+      // this pins everything already stored (the prefix must be unchanged —
+      // an employee can never edit or delete a past break) and fully
+      // validates the one entry a legitimate write touches. Every real
+      // client write fits one of three shapes (oxa-employee-portal
+      // lib/time-sessions.ts): unchanged; one entry appended (Pause, or
+      // withDefaultBreak's auto break at checkout); or the last, open entry
+      // closed (Resume, or closeOpenBreaks at checkout / missed checkout).
+      // A stale second toggle from another device matches none of them and
+      // is rejected instead of overwriting the first.
+      //
+      // Deliberately NOT enforced: that times are close to request.time.
+      // Pauses work offline and Firestore sends queued writes later, so a
+      // lower bound would reject legitimate delayed syncs — only "not in
+      // the future" (+5 min) is checked. end >= start is relaxed on the
+      // missed-checkout path (status "pending"): management reviews it and
+      // findInvalidBreaks already flags such entries there.
+      function validBreakEntry(b, checkIn, allowEndBeforeStart) {
+        return b.keys().hasAll(['start', 'end']) &&
+               b.keys().hasOnly(['start', 'end', 'auto', 'startClockOffsetMs', 'endClockOffsetMs']) &&
+               (!('auto' in b) || b.auto == true) &&
+               b.start is timestamp &&
+               b.start >= checkIn - duration.value(2, 'm') &&
+               b.start <= request.time + duration.value(5, 'm') &&
+               (b.end == null ||
+                (b.end is timestamp &&
+                 b.end <= request.time + duration.value(5, 'm') &&
+                 (allowEndBeforeStart || b.end >= b.start)));
+      }
+
+      // An out-of-range list index is an evaluation error, and in rules
+      // that error fails the WHOLE expression, even from a `||` branch whose
+      // guard is false (found in the emulator tests: a close-path index of
+      // n - 1 = -1 broke every Pause on an empty list). So no index here is
+      // ever computed by subtraction: one well-formed placeholder entry is
+      // put IN FRONT of both lists, shifting every real entry up by one —
+      // the last stored entry is then prevP[n], which exists even when
+      // `breaks` is empty, and a newly appended one is nextP[n + 1]. The
+      // trailing padding on nextP keeps nextP[n + 1] in range for every
+      // shape that should be allowed; anything else is denied either way.
+      function employeeBreaksChangeOk(before, after) {
+        let prev = before.breaks;
+        let next = after.breaks;
+        let n = prev.size();
+        let relaxed = after.status == "pending";
+        let pad = {'start': request.time, 'end': request.time};
+        let prevP = [pad].concat(prev);
+        let nextP = [pad].concat(next).concat([pad, pad]);
+        return next is list && next.size() <= 50 && (
+          next == prev ||
+          // One entry appended: Pause, or the auto break at checkout.
+          (next.size() == n + 1 &&
+           nextP[0:n + 1] == prevP &&
+           validBreakEntry(nextP[n + 1], before.checkIn, relaxed)) ||
+          // The last, open entry closed: Resume, or closed at checkout.
+          (n > 0 &&
+           next.size() == n &&
+           nextP[0:n] == prevP[0:n] &&
+           prevP[n].end == null &&
+           nextP[n].end != null &&
+           nextP[n].diff(prevP[n]).affectedKeys().hasOnly(['end', 'endClockOffsetMs']) &&
+           validBreakEntry(nextP[n], before.checkIn, relaxed))
+        );
+      }
+
       // checkIn must be within ~5 minutes of the server's own clock
       // (request.time) — a client can't backdate/postdate a session by
       // sending an arbitrary checkIn timestamp. Also pins the doc's
@@ -507,6 +583,15 @@ service cloud.firestore {
       // thing that ever clears it back to null is the scheduled cleanup
       // Cloud Function, which runs under the Admin SDK and bypasses these
       // rules entirely).
+      //
+      // checkInServerAt (serverTimestamp() from the client) must equal
+      // request.time exactly, so it's an unforgeable server-clock record
+      // of the write. Optional so an already-open portal tab still running
+      // the pre-2026-09-28 bundle can keep checking in. The checkIn window
+      // itself is deliberately NOT widened: checkIn drives payroll, and
+      // the portal now corrects a wrong phone clock before writing checkIn
+      // (oxa-employee-portal/lib/time-sessions.ts's submitCheckIn), so
+      // skewed phones pass the same 5 minutes.
       allow create: if isEmployeePortalAccess() &&
                     request.resource.data.uid == request.auth.uid &&
                     request.resource.data.status == "open" &&
@@ -516,13 +601,16 @@ service cloud.firestore {
                     request.resource.data.breaks == [] &&
                     request.resource.data.checkIn is timestamp &&
                     request.resource.data.checkIn > request.time - duration.value(5, 'm') &&
-                    request.resource.data.checkIn < request.time + duration.value(5, 'm');
+                    request.resource.data.checkIn < request.time + duration.value(5, 'm') &&
+                    (!('checkInServerAt' in request.resource.data) ||
+                     request.resource.data.checkInServerAt == request.time);
 
       allow update: if
         (isEmployeePortalAccess() &&
          resource.data.uid == request.auth.uid &&
          resource.data.status == "open" &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['breaks', 'checkOut', 'checkOutPhotoUrl', 'status']) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['breaks', 'checkOut', 'checkOutPhotoUrl', 'checkOutClockOffsetMs', 'status']) &&
+         employeeBreaksChangeOk(resource.data, request.resource.data) &&
          (
            (request.resource.data.status == "open" &&
             request.resource.data.checkOutPhotoUrl == null) ||
@@ -974,7 +1062,7 @@ service cloud.firestore {
            (resource.data.status in ["open", "rejected"] &&
             request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['checklist', 'status', 'proofPhotoUrls', 'completedBy', 'completedAt', 'rejectionReason',
-                        'startedAt', 'startedBy', 'taskBreaks']) &&
+                        'startedAt', 'startedBy', 'taskBreaks', 'startedClockOffsetMs', 'completedClockOffsetMs']) &&
             (
               // Still working on it (checklist ticks, start, pause/resume) —
               // status and the rejection reason both stay exactly as they
@@ -1039,6 +1127,19 @@ service cloud.firestore {
         request.resource.data.textTranslations is map;
 
       allow delete: if false;
+    }
+
+    // Compact archive of expired/completed taskInstances, keyed by the
+    // original instance id — written only by oxa-poster-tour's
+    // expireTaskInstances / cleanupStalePosterFeedbackTasks (Admin SDK,
+    // bypasses these rules). Read by management only: the Portal's Task
+    // Timeline, Finanzen day view and History tab, and oxa-poster-tour's
+    // Reports panel repair-task badge (isPosterManagement — same people
+    // today, named explicitly since that app checks it). No client writes
+    // at all; the 2-year purge runs in the same function.
+    match /taskLog/{instanceId} {
+      allow read: if isPortalManagement() || isPosterManagement();
+      allow write: if false;
     }
 
     // Diagnostic auto-logger for useTaskInstancesForEmployee's own listener
