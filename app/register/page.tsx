@@ -5,21 +5,9 @@ import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { compressImageFile } from "@/lib/image-compression";
+import { generateToken } from "@/lib/token";
 
 type UploadState = "idle" | "uploading" | "done" | "error";
-
-/**
- * 32-char random hex token for the temporary flyerPassports/{token}/ path.
- * Not stored on the registration doc — the admin mints a fresh token for
- * flyerVolunteers on approval. Uses getRandomValues rather than
- * crypto.randomUUID(): randomUUID only exists in secure contexts, so it
- * would break when testing on a phone via http://<LAN-IP>:3000.
- */
-function generateToken(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 const inputClass =
   "block w-full min-w-0 appearance-none rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base text-[#201E1B] min-h-[50px] focus:border-[#201E1B] focus:outline-none";

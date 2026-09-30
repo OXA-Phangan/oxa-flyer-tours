@@ -1,4 +1,5 @@
 import { getApps, initializeApp, type FirebaseOptions } from "firebase/app";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
@@ -17,7 +18,13 @@ const firebaseConfig: FirebaseOptions = {
 
 const app = getApps().length ? getApps()[0]! : initializeApp(firebaseConfig);
 
+export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+export const googleProvider = new GoogleAuthProvider();
+// Without this, signInWithPopup silently reuses whatever Google session is
+// already active in the browser instead of showing an account picker
+// (same fix as oxa-poster-tour / oxa-employee-portal lib/firebase.ts).
+googleProvider.setCustomParameters({ prompt: "select_account" });
 
 export default app;
