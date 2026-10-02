@@ -8,8 +8,10 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
+  setDoc,
   Timestamp,
   updateDoc,
   where,
@@ -68,6 +70,16 @@ type FlyerVolunteerDoc = {
   onBreak: boolean;
   hasPendingStayEdit: boolean;
   pendingStayEdit: PendingStayEdit | null;
+};
+
+type ChatSenderRole = "volunteer" | "admin";
+
+type ChatMessageDoc = {
+  id: string;
+  senderRole: ChatSenderRole;
+  senderName: string;
+  text: string;
+  createdAt: Timestamp | null;
 };
 
 const SPOT_TYPE_LABELS: Record<SpotType, string> = {
@@ -202,12 +214,13 @@ export default function AdminPage() {
 }
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
-  const [tab, setTab] = useState<"registrations" | "routes" | "crew">("registrations");
+  const [tab, setTab] = useState<"registrations" | "routes" | "crew" | "group-chat">("registrations");
 
   const tabs: { key: typeof tab; label: string }[] = [
     { key: "registrations", label: "Registrations" },
     { key: "routes", label: "Routes" },
     { key: "crew", label: "Crew" },
+    { key: "group-chat", label: "Group Chat" },
   ];
 
   return (
@@ -234,7 +247,8 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
 
       {tab === "registrations" && <RegistrationsSection adminEmail={adminEmail} />}
       {tab === "routes" && <RoutesSection />}
-      {tab === "crew" && <CrewSection />}
+      {tab === "crew" && <CrewSection adminEmail={adminEmail} />}
+      {tab === "group-chat" && <GroupChatSection adminEmail={adminEmail} />}
     </Shell>
   );
 }
@@ -373,6 +387,19 @@ function RegistrationDetail({
         onBreak: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+      });
+      // Chat thread for this volunteer, created up front since
+      // flyerChatThreads create is admin-only in the rules — the volunteer
+      // can only update it (unread flags), never create it.
+      batch.set(doc(db, "flyerChatThreads", token), {
+        volunteerId: token,
+        volunteerName: r.name,
+        lastMessage: null,
+        lastMessageAt: null,
+        lastSenderRole: null,
+        unreadByAdmin: false,
+        unreadByVolunteer: false,
+        createdAt: serverTimestamp(),
       });
       batch.update(doc(db, "flyerRegistrations", r.id), {
         status: "approved",
@@ -920,7 +947,7 @@ function RouteEditor({
 
 /* ===================== Crew ===================== */
 
-function CrewSection() {
+function CrewSection({ adminEmail }: { adminEmail: string }) {
   const [volunteers, setVolunteers] = useState<FlyerVolunteerDoc[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -948,7 +975,7 @@ function CrewSection() {
 
   const selected = volunteers?.find((v) => v.id === selectedId) ?? null;
   if (selected) {
-    return <CrewDetail volunteer={selected} onBack={() => setSelectedId(null)} />;
+    return <CrewDetail volunteer={selected} adminEmail={adminEmail} onBack={() => setSelectedId(null)} />;
   }
 
   return (
@@ -1003,7 +1030,15 @@ function CrewSection() {
   );
 }
 
-function CrewDetail({ volunteer: v, onBack }: { volunteer: FlyerVolunteerDoc; onBack: () => void }) {
+function CrewDetail({
+  volunteer: v,
+  adminEmail,
+  onBack,
+}: {
+  volunteer: FlyerVolunteerDoc;
+  adminEmail: string;
+  onBack: () => void;
+}) {
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -1114,9 +1149,235 @@ function CrewDetail({ volunteer: v, onBack }: { volunteer: FlyerVolunteerDoc; on
       )}
 
       <div className={`${cardClass} mb-5 break-all p-4 font-mono text-sm`}>{link}</div>
-      <button type="button" onClick={copyLink} className={secondaryButton}>
+      <button type="button" onClick={copyLink} className={`${secondaryButton} mb-5`}>
         {copied ? "✓ Copied" : "Copy Link"}
       </button>
+
+      <ChatPanel token={v.id} volunteerName={v.name} adminEmail={adminEmail} />
+    </>
+  );
+}
+
+function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunteerName: string; adminEmail: string }) {
+  const [messages, setMessages] = useState<ChatMessageDoc[] | null>(null);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Make sure the thread exists before subscribing — legacy volunteers
+    // approved before chat shipped don't have one yet, and only an admin
+    // is allowed to create it (see firestore.rules).
+    setDoc(
+      doc(db, "flyerChatThreads", token),
+      {
+        volunteerId: token,
+        volunteerName,
+        unreadByAdmin: false,
+      },
+      { merge: true }
+    ).catch((err) => console.error("[admin] ensure chat thread failed:", err));
+  }, [token, volunteerName]);
+
+  useEffect(() => {
+    const q = query(collection(db, "flyerChatThreads", token, "messages"), orderBy("createdAt", "asc"));
+    return onSnapshot(
+      q,
+      (snap) => setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessageDoc)),
+      (err) => console.error("[admin] chat messages listener failed:", err)
+    );
+  }, [token]);
+
+  async function send() {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setSending(true);
+    setError(null);
+    try {
+      await addDoc(collection(db, "flyerChatThreads", token, "messages"), {
+        senderRole: "admin",
+        senderName: adminEmail,
+        text: trimmed,
+        createdAt: serverTimestamp(),
+      });
+      await setDoc(
+        doc(db, "flyerChatThreads", token),
+        {
+          lastMessage: trimmed,
+          lastMessageAt: serverTimestamp(),
+          lastSenderRole: "admin",
+          unreadByVolunteer: true,
+          unreadByAdmin: false,
+        },
+        { merge: true }
+      );
+      setText("");
+    } catch (err) {
+      console.error("[admin] send chat message failed:", err);
+      setError("Message failed to send. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className={`${cardClass} p-4`}>
+      <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8A857A]">Chat with {volunteerName}</p>
+
+      <div className="mb-3 max-h-80 space-y-2 overflow-y-auto">
+        {messages === null && <p className="text-sm text-[#5C5850]">Loading…</p>}
+        {messages?.length === 0 && <p className="text-sm text-[#5C5850]">No messages yet.</p>}
+        {messages?.map((m) => (
+          <div
+            key={m.id}
+            className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+              m.senderRole === "admin" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+            }`}
+          >
+            {m.text}
+          </div>
+        ))}
+      </div>
+
+      {error && <p className="mb-2 text-sm text-red-800">{error}</p>}
+
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") send();
+          }}
+          placeholder="Type a message…"
+          className={spotTextInput}
+        />
+        <button
+          type="button"
+          onClick={send}
+          disabled={sending || !text.trim()}
+          className="shrink-0 rounded-lg bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== Group Chat ===================== */
+
+function GroupChatSection({ adminEmail }: { adminEmail: string }) {
+  const [messages, setMessages] = useState<ChatMessageDoc[] | null>(null);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "asc"));
+    return onSnapshot(
+      q,
+      (snap) => setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessageDoc)),
+      (err) => {
+        console.error("[admin] group chat listener failed:", err);
+        setError(err.code === "permission-denied" ? "Permission denied loading the group chat." : err.message);
+      }
+    );
+  }, []);
+
+  async function send() {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setSending(true);
+    setError(null);
+    try {
+      await addDoc(collection(db, "flyerGroupMessages"), {
+        senderRole: "admin",
+        senderName: adminEmail,
+        text: trimmed,
+        createdAt: serverTimestamp(),
+      });
+      setText("");
+    } catch (err) {
+      console.error("[admin] send group message failed:", err);
+      setError("Message failed to send. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function removeMessage(id: string) {
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, "flyerGroupMessages", id));
+    } catch (err) {
+      console.error("[admin] delete group message failed:", err);
+    } finally {
+      setConfirmDeleteId(null);
+    }
+  }
+
+  return (
+    <>
+      <p className="mb-4 text-sm text-[#5C5850]">Visible to every active volunteer</p>
+
+      <div className={`${cardClass} p-4`}>
+        <div className="mb-3 max-h-[28rem] space-y-2 overflow-y-auto">
+          {messages === null && !error && <p className="text-sm text-[#5C5850]">Loading…</p>}
+          {messages?.length === 0 && <p className="text-sm text-[#5C5850]">No messages yet.</p>}
+          {messages?.map((m) => (
+            <div
+              key={m.id}
+              className={`group max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+                m.senderRole === "admin" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+              }`}
+            >
+              {m.senderRole !== "admin" && (
+                <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">{m.senderName}</div>
+              )}
+              <div className="flex items-start justify-between gap-2">
+                <span>{m.text}</span>
+                <button
+                  type="button"
+                  onClick={() => removeMessage(m.id)}
+                  className={`shrink-0 text-xs underline ${
+                    m.senderRole === "admin" ? "text-white/70" : "text-[#8A857A]"
+                  }`}
+                >
+                  {confirmDeleteId === m.id ? "Confirm?" : "Delete"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {error && <p className="mb-2 text-sm text-red-800">{error}</p>}
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") send();
+            }}
+            placeholder="Message all active volunteers…"
+            className={spotTextInput}
+          />
+          <button
+            type="button"
+            onClick={send}
+            disabled={sending || !text.trim()}
+            className="shrink-0 rounded-lg bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            Send
+          </button>
+        </div>
+      </div>
     </>
   );
 }

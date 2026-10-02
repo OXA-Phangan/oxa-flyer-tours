@@ -7,6 +7,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
   Timestamp,
@@ -52,6 +55,13 @@ type Volunteer = {
   onBreak: boolean;
   hasPendingStayEdit: boolean;
   pendingStayEdit: PendingStayEdit | null;
+};
+
+type ChatMessage = {
+  id: string;
+  senderRole: "volunteer" | "admin";
+  senderName: string;
+  text: string;
 };
 
 type SpotStatus = "open" | "completed" | "skipped";
@@ -140,6 +150,12 @@ export default function TourPortalClient({ token }: { token: string }) {
   });
   const [stayEditBusy, setStayEditBusy] = useState(false);
   const [stayEditError, setStayEditError] = useState<string | null>(null);
+
+  const [chatOpen, setChatOpen] = useState<"direct" | "group" | null>(null);
+  const [directMessages, setDirectMessages] = useState<ChatMessage[] | null>(null);
+  const [groupMessages, setGroupMessages] = useState<ChatMessage[] | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tourRef = useRef(tour);
@@ -462,6 +478,79 @@ export default function TourPortalClient({ token }: { token: string }) {
     }
   }
 
+  // ---- Chat ----
+  useEffect(() => {
+    if (chatOpen === "direct") {
+      // Best-effort: the thread may not exist yet for volunteers approved
+      // before chat shipped — only an admin can create it (see
+      // firestore.rules), so a volunteer-side miss here is harmless.
+      updateDoc(doc(db, "flyerChatThreads", token), { unreadByVolunteer: false }).catch(() => {});
+      const q = query(collection(db, "flyerChatThreads", token, "messages"), orderBy("createdAt", "asc"));
+      return onSnapshot(
+        q,
+        (snap) =>
+          setDirectMessages(
+            snap.docs.map((d) => {
+              const data = d.data() as { senderRole: "volunteer" | "admin"; senderName: string; text: string };
+              return { id: d.id, senderRole: data.senderRole, senderName: data.senderName, text: data.text };
+            })
+          ),
+        (err) => console.error("[tour] direct chat listener failed:", err)
+      );
+    }
+    if (chatOpen === "group") {
+      const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "asc"));
+      return onSnapshot(
+        q,
+        (snap) =>
+          setGroupMessages(
+            snap.docs.map((d) => {
+              const data = d.data() as { senderRole: "volunteer" | "admin"; senderName: string; text: string };
+              return { id: d.id, senderRole: data.senderRole, senderName: data.senderName, text: data.text };
+            })
+          ),
+        (err) => console.error("[tour] group chat listener failed:", err)
+      );
+    }
+  }, [chatOpen, token]);
+
+  async function sendChatMessage() {
+    const trimmed = chatInput.trim();
+    if (!trimmed || !volunteer) return;
+    setChatSending(true);
+    try {
+      if (chatOpen === "direct") {
+        await addDoc(collection(db, "flyerChatThreads", token, "messages"), {
+          senderRole: "volunteer",
+          senderName: volunteer.name,
+          text: trimmed,
+          createdAt: serverTimestamp(),
+        });
+        // Thread doc may not exist for legacy volunteers — ignore if so,
+        // the message itself still went through.
+        await updateDoc(doc(db, "flyerChatThreads", token), {
+          lastMessage: trimmed,
+          lastMessageAt: serverTimestamp(),
+          lastSenderRole: "volunteer",
+          unreadByAdmin: true,
+          unreadByVolunteer: false,
+        }).catch(() => {});
+      } else if (chatOpen === "group") {
+        await addDoc(collection(db, "flyerGroupMessages"), {
+          senderRole: "volunteer",
+          senderName: volunteer.name,
+          text: trimmed,
+          createdAt: serverTimestamp(),
+        });
+      }
+      setChatInput("");
+    } catch (err) {
+      console.error("[tour] failed to send chat message:", err);
+    } finally {
+      setChatSending(false);
+    }
+  }
+
   /* ===================== Screens ===================== */
 
   if (screen === "loading") {
@@ -526,6 +615,23 @@ export default function TourPortalClient({ token }: { token: string }) {
             )}
           </div>
         )}
+
+        <div className="mb-6 flex gap-3">
+          <button
+            type="button"
+            onClick={() => setChatOpen("direct")}
+            className={`${cardClass} flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+          >
+            💬 Message OXA
+          </button>
+          <button
+            type="button"
+            onClick={() => setChatOpen("group")}
+            className={`${cardClass} flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+          >
+            👥 Group Chat
+          </button>
+        </div>
 
         {regions.length === 0 && (
           <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
@@ -657,6 +763,67 @@ export default function TourPortalClient({ token }: { token: string }) {
                   className={secondaryButton}
                 >
                   Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {chatOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+            onClick={() => setChatOpen(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
+            >
+              <div className="p-6 pb-4">
+                <h2 className="text-lg font-semibold">{chatOpen === "direct" ? "Message OXA" : "Group Chat"}</h2>
+              </div>
+
+              <div className="flex-1 space-y-2 overflow-y-auto px-6">
+                {(() => {
+                  const list = chatOpen === "direct" ? directMessages : groupMessages;
+                  if (list === null) return <p className="text-sm text-[#5C5850]">Loading…</p>;
+                  if (list.length === 0) return <p className="text-sm text-[#5C5850]">No messages yet.</p>;
+                  return list.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+                        m.senderRole === "volunteer" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+                      }`}
+                    >
+                      {chatOpen === "group" && m.senderRole !== "volunteer" && (
+                        <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">OXA Team</div>
+                      )}
+                      {chatOpen === "group" && m.senderRole === "volunteer" && (
+                        <div className="mb-0.5 text-xs font-semibold text-white/70">{m.senderName}</div>
+                      )}
+                      {m.text}
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              <div className="flex gap-2 p-6 pt-4">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") sendChatMessage();
+                  }}
+                  placeholder="Type a message…"
+                  className={fieldInput}
+                />
+                <button
+                  type="button"
+                  onClick={sendChatMessage}
+                  disabled={chatSending || !chatInput.trim()}
+                  className="shrink-0 rounded-xl bg-[#201E1B] px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  Send
                 </button>
               </div>
             </div>
