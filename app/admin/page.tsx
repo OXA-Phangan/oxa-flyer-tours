@@ -50,6 +50,26 @@ type FlyerRouteDoc = {
   duplicatedFrom?: string | null;
 };
 
+type PendingStayEdit = {
+  checkInDate: string;
+  checkInTime: string | null;
+  checkOutDate: string;
+  checkOutTime: string | null;
+};
+
+type FlyerVolunteerDoc = {
+  id: string; // token
+  name: string;
+  checkInDate: string;
+  checkInTime: string | null;
+  checkOutDate: string;
+  checkOutTime: string | null;
+  status: "active" | "departed";
+  onBreak: boolean;
+  hasPendingStayEdit: boolean;
+  pendingStayEdit: PendingStayEdit | null;
+};
+
 const SPOT_TYPE_LABELS: Record<SpotType, string> = {
   NORMAL: "Normal",
   BREAK: "Break",
@@ -182,37 +202,39 @@ export default function AdminPage() {
 }
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
-  const [tab, setTab] = useState<"registrations" | "routes">("registrations");
+  const [tab, setTab] = useState<"registrations" | "routes" | "crew">("registrations");
+
+  const tabs: { key: typeof tab; label: string }[] = [
+    { key: "registrations", label: "Registrations" },
+    { key: "routes", label: "Routes" },
+    { key: "crew", label: "Crew" },
+  ];
 
   return (
     <Shell>
-      <div className="mb-6 flex items-start justify-between gap-3">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div className="flex gap-2 rounded-full bg-[#E2DFD6] p-1">
-          <button
-            type="button"
-            onClick={() => setTab("registrations")}
-            className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
-              tab === "registrations" ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
-            }`}
-          >
-            Registrations
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("routes")}
-            className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
-              tab === "routes" ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
-            }`}
-          >
-            Routes
-          </button>
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
+                tab === t.key ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
         <button type="button" onClick={() => signOut(auth)} className="pt-2 text-sm text-[#5C5850] underline">
           Sign out
         </button>
       </div>
 
-      {tab === "registrations" ? <RegistrationsSection adminEmail={adminEmail} /> : <RoutesSection />}
+      {tab === "registrations" && <RegistrationsSection adminEmail={adminEmail} />}
+      {tab === "routes" && <RoutesSection />}
+      {tab === "crew" && <CrewSection />}
     </Shell>
   );
 }
@@ -892,6 +914,209 @@ function RouteEditor({
           </button>
         )}
       </div>
+    </>
+  );
+}
+
+/* ===================== Crew ===================== */
+
+function CrewSection() {
+  const [volunteers, setVolunteers] = useState<FlyerVolunteerDoc[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    return onSnapshot(
+      collection(db, "flyerVolunteers"),
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as FlyerVolunteerDoc);
+        rows.sort((a, b) => {
+          // Active first, pending-stay-edit requests bubble to the top within that, then by name.
+          if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+          if (a.hasPendingStayEdit !== b.hasPendingStayEdit) return a.hasPendingStayEdit ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        setVolunteers(rows);
+        setListError(null);
+      },
+      (err) => {
+        console.error("[admin] crew listener failed:", err);
+        setListError(err.code === "permission-denied" ? "Permission denied loading crew." : err.message);
+      }
+    );
+  }, []);
+
+  const selected = volunteers?.find((v) => v.id === selectedId) ?? null;
+  if (selected) {
+    return <CrewDetail volunteer={selected} onBack={() => setSelectedId(null)} />;
+  }
+
+  return (
+    <>
+      <p className="mb-4 text-sm text-[#5C5850]">All flyer volunteers</p>
+
+      {listError && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {listError}
+        </div>
+      )}
+
+      {volunteers === null && !listError && <p className="text-[#5C5850]">Loading…</p>}
+      {volunteers?.length === 0 && (
+        <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>No volunteers yet.</div>
+      )}
+
+      <ul className="space-y-3">
+        {volunteers?.map((v) => (
+          <li key={v.id}>
+            <button
+              type="button"
+              onClick={() => setSelectedId(v.id)}
+              className={`${cardClass} block w-full p-4 text-left active:bg-[#FBF9F4]`}
+            >
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="truncate text-base font-semibold">{v.name}</span>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    v.status === "active" ? "bg-green-100 text-green-800" : "bg-[#E2DFD6] text-[#5C5850]"
+                  }`}
+                >
+                  {v.status === "active" ? "Active" : "Departed"}
+                </span>
+              </div>
+              <div className="mt-1 text-sm text-[#5C5850]">
+                {v.checkInDate} → {v.checkOutDate}
+              </div>
+              <div className="mt-1 flex gap-2 text-xs">
+                {v.onBreak && <span className="rounded-full bg-[#FBF9F4] px-2 py-0.5 text-[#8A857A]">☕ On break</span>}
+                {v.hasPendingStayEdit && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
+                    ⏳ Stay change requested
+                  </span>
+                )}
+              </div>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function CrewDetail({ volunteer: v, onBack }: { volunteer: FlyerVolunteerDoc; onBack: () => void }) {
+  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const link = typeof window !== "undefined" ? `${window.location.origin}/v/${v.id}` : "";
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = link;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function approveStayEdit() {
+    if (!v.pendingStayEdit) return;
+    setBusy("approve");
+    setError(null);
+    try {
+      await updateDoc(doc(db, "flyerVolunteers", v.id), {
+        checkInDate: v.pendingStayEdit.checkInDate,
+        checkInTime: v.pendingStayEdit.checkInTime,
+        checkOutDate: v.pendingStayEdit.checkOutDate,
+        checkOutTime: v.pendingStayEdit.checkOutTime,
+        passportDeleteAfter: passportDeleteAfter(v.pendingStayEdit.checkOutDate),
+        pendingStayEdit: null,
+        hasPendingStayEdit: false,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("[admin] approve stay edit failed:", err);
+      setError("Approving failed. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rejectStayEdit() {
+    setBusy("reject");
+    setError(null);
+    try {
+      await updateDoc(doc(db, "flyerVolunteers", v.id), {
+        pendingStayEdit: null,
+        hasPendingStayEdit: false,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("[admin] reject stay edit failed:", err);
+      setError("Rejecting failed. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" onClick={onBack} className="mb-4 text-sm text-[#5C5850] underline">
+        ← Back to crew
+      </button>
+
+      <div className={`${cardClass} mb-5 divide-y divide-[#E2DFD6]`}>
+        <Row label="Name" value={v.name} />
+        <Row label="Status" value={v.status === "active" ? "Active" : "Departed"} />
+        <Row label="Check-in" value={formatDateTime(v.checkInDate, v.checkInTime)} />
+        <Row label="Check-out" value={formatDateTime(v.checkOutDate, v.checkOutTime)} />
+        <Row label="On break" value={v.onBreak ? "✓ Yes" : "✗ No"} />
+      </div>
+
+      {v.hasPendingStayEdit && v.pendingStayEdit && (
+        <div className="mb-5 rounded-2xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="mb-1 text-sm font-semibold text-amber-900">⏳ Stay change requested</p>
+          <p className="mb-3 text-sm text-amber-900">
+            {formatDateTime(v.pendingStayEdit.checkInDate, v.pendingStayEdit.checkInTime)} →{" "}
+            {formatDateTime(v.pendingStayEdit.checkOutDate, v.pendingStayEdit.checkOutTime)}
+          </p>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={approveStayEdit}
+              disabled={busy !== null}
+              className="w-full rounded-xl bg-[#201E1B] px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              {busy === "approve" ? "Approving…" : "Approve change"}
+            </button>
+            <button
+              type="button"
+              onClick={rejectStayEdit}
+              disabled={busy !== null}
+              className="w-full rounded-xl border border-red-300 bg-white px-4 py-3 text-sm font-semibold text-red-800 disabled:opacity-40"
+            >
+              {busy === "reject" ? "Rejecting…" : "Reject change"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      <div className={`${cardClass} mb-5 break-all p-4 font-mono text-sm`}>{link}</div>
+      <button type="button" onClick={copyLink} className={secondaryButton}>
+        {copied ? "✓ Copied" : "Copy Link"}
+      </button>
     </>
   );
 }

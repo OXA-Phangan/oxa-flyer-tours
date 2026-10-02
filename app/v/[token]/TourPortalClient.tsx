@@ -35,12 +35,23 @@ type FlyerRoute = {
   spots: Spot[];
 };
 
+type PendingStayEdit = {
+  checkInDate: string;
+  checkInTime: string | null;
+  checkOutDate: string;
+  checkOutTime: string | null;
+};
+
 type Volunteer = {
   name: string;
   checkInDate: string;
+  checkInTime: string | null;
   checkOutDate: string;
+  checkOutTime: string | null;
   status: "active" | "departed";
   onBreak: boolean;
+  hasPendingStayEdit: boolean;
+  pendingStayEdit: PendingStayEdit | null;
 };
 
 type SpotStatus = "open" | "completed" | "skipped";
@@ -62,6 +73,9 @@ const primaryButton =
   "w-full rounded-2xl bg-[#201E1B] px-4 py-4 text-base font-semibold text-white disabled:opacity-40";
 const secondaryButton =
   "w-full rounded-2xl border border-[#E2DFD6] bg-white px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40";
+const fieldInput =
+  "block w-full min-w-0 appearance-none rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base text-[#201E1B] min-h-[50px] focus:border-[#201E1B] focus:outline-none";
+const fieldLabel = "mb-1.5 block text-sm font-medium text-[#201E1B]";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -116,6 +130,16 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [regionSheetKey, setRegionSheetKey] = useState<string | null>(null);
   const [skipSheetOpen, setSkipSheetOpen] = useState(false);
   const [skipWarning, setSkipWarning] = useState<{ targetIndex: number } | null>(null);
+
+  const [stayEditOpen, setStayEditOpen] = useState(false);
+  const [stayEditForm, setStayEditForm] = useState({
+    checkInDate: "",
+    checkInTime: "",
+    checkOutDate: "",
+    checkOutTime: "",
+  });
+  const [stayEditBusy, setStayEditBusy] = useState(false);
+  const [stayEditError, setStayEditError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tourRef = useRef(tour);
@@ -377,6 +401,67 @@ export default function TourPortalClient({ token }: { token: string }) {
     }
   }
 
+  function openStayEdit() {
+    if (!volunteer) return;
+    setStayEditForm({
+      checkInDate: volunteer.checkInDate,
+      checkInTime: volunteer.checkInTime ?? "",
+      checkOutDate: volunteer.checkOutDate,
+      checkOutTime: volunteer.checkOutTime ?? "",
+    });
+    setStayEditError(null);
+    setStayEditOpen(true);
+  }
+
+  async function submitStayEdit() {
+    if (!volunteer) return;
+    if (!stayEditForm.checkInDate || !stayEditForm.checkOutDate) {
+      setStayEditError("Please fill in both dates.");
+      return;
+    }
+    if (stayEditForm.checkOutDate < stayEditForm.checkInDate) {
+      setStayEditError("Check-out can't be before check-in.");
+      return;
+    }
+    setStayEditBusy(true);
+    setStayEditError(null);
+    const pendingStayEdit: PendingStayEdit = {
+      checkInDate: stayEditForm.checkInDate,
+      checkInTime: stayEditForm.checkInTime || null,
+      checkOutDate: stayEditForm.checkOutDate,
+      checkOutTime: stayEditForm.checkOutTime || null,
+    };
+    try {
+      await updateDoc(doc(db, "flyerVolunteers", token), {
+        pendingStayEdit,
+        hasPendingStayEdit: true,
+      });
+      setVolunteer({ ...volunteer, pendingStayEdit, hasPendingStayEdit: true });
+      setStayEditOpen(false);
+    } catch (err) {
+      console.error("[tour] failed to submit stay edit request:", err);
+      setStayEditError("Something went wrong. Please try again.");
+    } finally {
+      setStayEditBusy(false);
+    }
+  }
+
+  async function cancelStayEdit() {
+    if (!volunteer) return;
+    setStayEditBusy(true);
+    try {
+      await updateDoc(doc(db, "flyerVolunteers", token), {
+        pendingStayEdit: null,
+        hasPendingStayEdit: false,
+      });
+      setVolunteer({ ...volunteer, pendingStayEdit: null, hasPendingStayEdit: false });
+    } catch (err) {
+      console.error("[tour] failed to cancel stay edit request:", err);
+    } finally {
+      setStayEditBusy(false);
+    }
+  }
+
   /* ===================== Screens ===================== */
 
   if (screen === "loading") {
@@ -412,6 +497,35 @@ export default function TourPortalClient({ token }: { token: string }) {
           <h1 className="text-2xl font-semibold">Where to next?</h1>
           {volunteer && <p className="text-sm text-[#5C5850]">Hi {volunteer.name} 👋</p>}
         </div>
+
+        {volunteer && (
+          <div className={`${cardClass} mb-6 p-4`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">My stay</p>
+                <p className="text-sm">
+                  {volunteer.checkInDate} → {volunteer.checkOutDate}
+                </p>
+              </div>
+              {!volunteer.hasPendingStayEdit && (
+                <button type="button" onClick={openStayEdit} className="shrink-0 text-sm font-semibold underline">
+                  Request change
+                </button>
+              )}
+            </div>
+            {volunteer.hasPendingStayEdit && volunteer.pendingStayEdit && (
+              <div className="mt-3 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-3 text-sm">
+                <p className="mb-2">
+                  ⏳ Requested: {volunteer.pendingStayEdit.checkInDate} → {volunteer.pendingStayEdit.checkOutDate}.
+                  Waiting for OXA to approve.
+                </p>
+                <button type="button" onClick={cancelStayEdit} disabled={stayEditBusy} className="font-semibold underline disabled:opacity-40">
+                  {stayEditBusy ? "Cancelling…" : "Cancel request"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {regions.length === 0 && (
           <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
@@ -460,6 +574,91 @@ export default function TourPortalClient({ token }: { token: string }) {
               <button type="button" onClick={() => setRegionSheetKey(null)} className={`${secondaryButton} mt-4`}>
                 Cancel
               </button>
+            </div>
+          </div>
+        )}
+
+        {stayEditOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+            onClick={() => !stayEditBusy && setStayEditOpen(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-6 sm:rounded-2xl"
+            >
+              <h2 className="mb-4 text-lg font-semibold">Request a stay change</h2>
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="stayCheckInDate" className={fieldLabel}>
+                    Check-in date
+                  </label>
+                  <input
+                    id="stayCheckInDate"
+                    type="date"
+                    value={stayEditForm.checkInDate}
+                    onChange={(e) => setStayEditForm((f) => ({ ...f, checkInDate: e.target.value }))}
+                    className={fieldInput}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="stayCheckInTime" className={fieldLabel}>
+                    Check-in time <span className="font-normal text-[#8A857A]">(optional)</span>
+                  </label>
+                  <input
+                    id="stayCheckInTime"
+                    type="time"
+                    value={stayEditForm.checkInTime}
+                    onChange={(e) => setStayEditForm((f) => ({ ...f, checkInTime: e.target.value }))}
+                    className={fieldInput}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="stayCheckOutDate" className={fieldLabel}>
+                    Check-out date
+                  </label>
+                  <input
+                    id="stayCheckOutDate"
+                    type="date"
+                    min={stayEditForm.checkInDate || undefined}
+                    value={stayEditForm.checkOutDate}
+                    onChange={(e) => setStayEditForm((f) => ({ ...f, checkOutDate: e.target.value }))}
+                    className={fieldInput}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="stayCheckOutTime" className={fieldLabel}>
+                    Check-out time <span className="font-normal text-[#8A857A]">(optional)</span>
+                  </label>
+                  <input
+                    id="stayCheckOutTime"
+                    type="time"
+                    value={stayEditForm.checkOutTime}
+                    onChange={(e) => setStayEditForm((f) => ({ ...f, checkOutTime: e.target.value }))}
+                    className={fieldInput}
+                  />
+                </div>
+              </div>
+
+              {stayEditError && (
+                <div role="alert" className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+                  {stayEditError}
+                </div>
+              )}
+
+              <div className="mt-5 space-y-3">
+                <button type="button" onClick={submitStayEdit} disabled={stayEditBusy} className={primaryButton}>
+                  {stayEditBusy ? "Sending…" : "Send request"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStayEditOpen(false)}
+                  disabled={stayEditBusy}
+                  className={secondaryButton}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         )}
