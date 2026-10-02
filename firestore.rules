@@ -1343,7 +1343,7 @@ service cloud.firestore {
       return isSignedIn() &&
              (request.auth.token.flyerAdmin == true ||
               request.auth.token.email.lower() in
-                ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com']);
+                ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com', 'mobit.booking@gmail.com']);
     }
 
     match /flyerRegistrations/{regId} {
