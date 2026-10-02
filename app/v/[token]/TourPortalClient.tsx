@@ -157,6 +157,12 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
+  const [supplySheetOpen, setSupplySheetOpen] = useState(false);
+  const [supplyForm, setSupplyForm] = useState({ item: "", note: "" });
+  const [supplyBusy, setSupplyBusy] = useState(false);
+  const [supplyError, setSupplyError] = useState<string | null>(null);
+  const [supplySent, setSupplySent] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tourRef = useRef(tour);
   tourRef.current = tour;
@@ -551,6 +557,41 @@ export default function TourPortalClient({ token }: { token: string }) {
     }
   }
 
+  // ---- Supply reports ----
+  function openSupplySheet() {
+    setSupplyForm({ item: "", note: "" });
+    setSupplyError(null);
+    setSupplySent(false);
+    setSupplySheetOpen(true);
+  }
+
+  async function submitSupplyReport() {
+    if (!volunteer) return;
+    const item = supplyForm.item.trim();
+    if (!item) {
+      setSupplyError("Please say what's missing.");
+      return;
+    }
+    setSupplyBusy(true);
+    setSupplyError(null);
+    try {
+      await addDoc(collection(db, "flyerSupplyReports"), {
+        volunteerId: token,
+        volunteerName: volunteer.name,
+        item,
+        note: supplyForm.note.trim() || null,
+        status: "open",
+        createdAt: serverTimestamp(),
+      });
+      setSupplySent(true);
+    } catch (err) {
+      console.error("[tour] failed to submit supply report:", err);
+      setSupplyError("Something went wrong. Please try again.");
+    } finally {
+      setSupplyBusy(false);
+    }
+  }
+
   /* ===================== Screens ===================== */
 
   if (screen === "loading") {
@@ -632,6 +673,14 @@ export default function TourPortalClient({ token }: { token: string }) {
             👥 Group Chat
           </button>
         </div>
+
+        <button
+          type="button"
+          onClick={openSupplySheet}
+          className={`${cardClass} mb-6 block w-full p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+        >
+          📦 Report missing supplies
+        </button>
 
         {regions.length === 0 && (
           <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
@@ -826,6 +875,82 @@ export default function TourPortalClient({ token }: { token: string }) {
                   Send
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {supplySheetOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+            onClick={() => !supplyBusy && setSupplySheetOpen(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-6 sm:rounded-2xl"
+            >
+              {supplySent ? (
+                <>
+                  <h2 className="mb-2 text-lg font-semibold">Thanks! 🙌</h2>
+                  <p className="mb-5 text-sm text-[#5C5850]">
+                    We&apos;ve let the OXA team know what&apos;s missing.
+                  </p>
+                  <button type="button" onClick={() => setSupplySheetOpen(false)} className={primaryButton}>
+                    Done
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2 className="mb-4 text-lg font-semibold">Report missing supplies</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label htmlFor="supplyItem" className={fieldLabel}>
+                        What&apos;s missing?
+                      </label>
+                      <input
+                        id="supplyItem"
+                        type="text"
+                        value={supplyForm.item}
+                        onChange={(e) => setSupplyForm((f) => ({ ...f, item: e.target.value }))}
+                        placeholder="e.g. Flyers, scooter helmet…"
+                        className={fieldInput}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="supplyNote" className={fieldLabel}>
+                        Note <span className="font-normal text-[#8A857A]">(optional)</span>
+                      </label>
+                      <input
+                        id="supplyNote"
+                        type="text"
+                        value={supplyForm.note}
+                        onChange={(e) => setSupplyForm((f) => ({ ...f, note: e.target.value }))}
+                        placeholder="Any extra details"
+                        className={fieldInput}
+                      />
+                    </div>
+                  </div>
+
+                  {supplyError && (
+                    <div role="alert" className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+                      {supplyError}
+                    </div>
+                  )}
+
+                  <div className="mt-5 space-y-3">
+                    <button type="button" onClick={submitSupplyReport} disabled={supplyBusy} className={primaryButton}>
+                      {supplyBusy ? "Sending…" : "Send report"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSupplySheetOpen(false)}
+                      disabled={supplyBusy}
+                      className={secondaryButton}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

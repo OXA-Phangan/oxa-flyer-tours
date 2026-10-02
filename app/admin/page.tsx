@@ -82,6 +82,18 @@ type ChatMessageDoc = {
   createdAt: Timestamp | null;
 };
 
+type SupplyReportStatus = "open" | "resolved";
+
+type SupplyReportDoc = {
+  id: string;
+  volunteerId: string;
+  volunteerName: string;
+  item: string;
+  note: string | null;
+  status: SupplyReportStatus;
+  createdAt: Timestamp | null;
+};
+
 const SPOT_TYPE_LABELS: Record<SpotType, string> = {
   NORMAL: "Normal",
   BREAK: "Break",
@@ -214,13 +226,14 @@ export default function AdminPage() {
 }
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
-  const [tab, setTab] = useState<"registrations" | "routes" | "crew" | "group-chat">("registrations");
+  const [tab, setTab] = useState<"registrations" | "routes" | "crew" | "group-chat" | "supplies">("registrations");
 
   const tabs: { key: typeof tab; label: string }[] = [
     { key: "registrations", label: "Registrations" },
     { key: "routes", label: "Routes" },
     { key: "crew", label: "Crew" },
     { key: "group-chat", label: "Group Chat" },
+    { key: "supplies", label: "Supplies" },
   ];
 
   return (
@@ -249,6 +262,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
       {tab === "routes" && <RoutesSection />}
       {tab === "crew" && <CrewSection adminEmail={adminEmail} />}
       {tab === "group-chat" && <GroupChatSection adminEmail={adminEmail} />}
+      {tab === "supplies" && <SupplyReportsSection />}
     </Shell>
   );
 }
@@ -1378,6 +1392,99 @@ function GroupChatSection({ adminEmail }: { adminEmail: string }) {
           </button>
         </div>
       </div>
+    </>
+  );
+}
+
+function SupplyReportsSection() {
+  const [reports, setReports] = useState<SupplyReportDoc[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Sorted client-side rather than orderBy("status") + orderBy("createdAt")
+    // — that pairing would need a composite index.
+    const q = query(collection(db, "flyerSupplyReports"), orderBy("createdAt", "desc"));
+    return onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as SupplyReportDoc);
+        rows.sort((a, b) => {
+          if (a.status !== b.status) return a.status === "open" ? -1 : 1;
+          return (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0);
+        });
+        setReports(rows);
+        setError(null);
+      },
+      (err) => {
+        console.error("[admin] supply reports listener failed:", err);
+        setError(err.code === "permission-denied" ? "Permission denied loading supply reports." : err.message);
+      }
+    );
+  }, []);
+
+  async function setStatus(id: string, status: SupplyReportStatus) {
+    setBusyId(id);
+    try {
+      await updateDoc(doc(db, "flyerSupplyReports", id), {
+        status,
+        resolvedAt: status === "resolved" ? serverTimestamp() : null,
+      });
+    } catch (err) {
+      console.error("[admin] failed to update supply report:", err);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <>
+      <p className="mb-4 text-sm text-[#5C5850]">Missing-supply reports from volunteers</p>
+
+      {error && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      {reports === null && !error && <p className="text-[#5C5850]">Loading…</p>}
+      {reports?.length === 0 && (
+        <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>No supply reports yet.</div>
+      )}
+
+      <ul className="space-y-3">
+        {reports?.map((r) => (
+          <li key={r.id} className={`${cardClass} p-4 ${r.status === "resolved" ? "opacity-60" : ""}`}>
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="truncate text-base font-semibold">{r.item}</span>
+              <span className="shrink-0 text-xs text-[#8A857A]">{timeAgo(r.createdAt)}</span>
+            </div>
+            <div className="mt-1 text-sm text-[#5C5850]">{r.volunteerName}</div>
+            {r.note && <div className="mt-2 text-sm">{r.note}</div>}
+            <div className="mt-3">
+              {r.status === "open" ? (
+                <button
+                  type="button"
+                  onClick={() => setStatus(r.id, "resolved")}
+                  disabled={busyId === r.id}
+                  className="text-sm font-semibold underline disabled:opacity-40"
+                >
+                  {busyId === r.id ? "Marking…" : "Mark resolved"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setStatus(r.id, "open")}
+                  disabled={busyId === r.id}
+                  className="text-sm text-[#8A857A] underline disabled:opacity-40"
+                >
+                  {busyId === r.id ? "Reopening…" : "✓ Resolved — reopen"}
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
