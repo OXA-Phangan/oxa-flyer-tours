@@ -5,17 +5,25 @@
 // Usage (run on a machine with a Firebase Admin service account key for the
 // shared oxa-ticket-app project):
 //   GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json node scripts/import-flyer-routes.js
+// (PowerShell): $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\serviceAccountKey.json"; node scripts/import-flyer-routes.js
+//
+// Uses firebase-admin's modular API (require("firebase-admin/app") /
+// require("firebase-admin/firestore")) rather than the older namespaced
+// `admin.initializeApp()` / `admin.credential` style — the namespaced style
+// has been unreliable on some firebase-admin v14 installs (admin.credential
+// comes back undefined depending on how the package resolves its exports).
 //
 // Safe to re-run — it always creates new documents rather than touching or
 // de-duplicating existing ones. If you need to re-import after a fix, delete
 // the previously-created routes in the admin Route Builder UI first (or
 // filter by createdAt) to avoid ending up with duplicates.
 
-const admin = require("firebase-admin");
+const { initializeApp, applicationDefault } = require("firebase-admin/app");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { routesToImport } = require("./flyer-routes-data");
 
-admin.initializeApp({ credential: admin.credential.applicationDefault() });
-const db = admin.firestore();
+initializeApp({ credential: applicationDefault() });
+const db = getFirestore();
 
 async function main() {
   console.log(`Importing ${routesToImport.length} routes...`);
@@ -27,8 +35,8 @@ async function main() {
       name: route.name,
       duplicatedFrom: null,
       spots: route.spots,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     console.log(`  ✓ ${route.region} / ${route.name} (${route.spots.length} spots) -> ${ref.id}`);
   }
