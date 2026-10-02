@@ -3,7 +3,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import {
+  addDoc,
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   query,
@@ -29,6 +31,34 @@ type Registration = {
   depositAcknowledged: boolean;
   submittedAt: Timestamp | null;
 };
+
+type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
+
+type RouteSpot = {
+  name: string;
+  type: SpotType;
+  time: string;
+  comment: string;
+  mapsLink: string | null;
+};
+
+type FlyerRouteDoc = {
+  id: string;
+  region: string;
+  name: string;
+  spots: RouteSpot[];
+  duplicatedFrom?: string | null;
+};
+
+const SPOT_TYPE_LABELS: Record<SpotType, string> = {
+  NORMAL: "Normal",
+  BREAK: "Break",
+  SCOOTER_INFO: "Scooter Info",
+};
+
+function blankSpot(): RouteSpot {
+  return { name: "", type: "NORMAL", time: "", comment: "", mapsLink: null };
+}
 
 const cardClass = "rounded-2xl border border-[#E2DFD6] bg-white";
 const primaryButton =
@@ -152,6 +182,42 @@ export default function AdminPage() {
 }
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
+  const [tab, setTab] = useState<"registrations" | "routes">("registrations");
+
+  return (
+    <Shell>
+      <div className="mb-6 flex items-start justify-between gap-3">
+        <div className="flex gap-2 rounded-full bg-[#E2DFD6] p-1">
+          <button
+            type="button"
+            onClick={() => setTab("registrations")}
+            className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
+              tab === "registrations" ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
+            }`}
+          >
+            Registrations
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("routes")}
+            className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
+              tab === "routes" ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
+            }`}
+          >
+            Routes
+          </button>
+        </div>
+        <button type="button" onClick={() => signOut(auth)} className="pt-2 text-sm text-[#5C5850] underline">
+          Sign out
+        </button>
+      </div>
+
+      {tab === "registrations" ? <RegistrationsSection adminEmail={adminEmail} /> : <RoutesSection />}
+    </Shell>
+  );
+}
+
+function RegistrationsSection({ adminEmail }: { adminEmail: string }) {
   const [registrations, setRegistrations] = useState<Registration[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -196,16 +262,8 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
   }
 
   return (
-    <Shell>
-      <div className="mb-6 flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Registrations</h1>
-          <p className="text-sm text-[#5C5850]">Pending review</p>
-        </div>
-        <button type="button" onClick={() => signOut(auth)} className="pt-1 text-sm text-[#5C5850] underline">
-          Sign out
-        </button>
-      </div>
+    <>
+      <p className="mb-4 text-sm text-[#5C5850]">Pending review</p>
 
       {listError && (
         <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
@@ -237,7 +295,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
           </li>
         ))}
       </ul>
-    </Shell>
+    </>
   );
 }
 
@@ -330,7 +388,7 @@ function RegistrationDetail({
   }
 
   return (
-    <Shell>
+    <>
       <button type="button" onClick={onBack} className="mb-4 text-sm text-[#5C5850] underline">
         ← Back to list
       </button>
@@ -377,7 +435,7 @@ function RegistrationDetail({
           {busy === "reject" ? "Rejecting…" : confirmReject ? "Tap again to confirm reject" : "Reject"}
         </button>
       </div>
-    </Shell>
+    </>
   );
 }
 
@@ -414,7 +472,7 @@ function ApprovedScreen({ name, url, onDone }: { name: string; url: string; onDo
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
 
   return (
-    <Shell>
+    <>
       <div className="mb-5 rounded-2xl border border-green-600 bg-green-50 p-5 text-green-800">
         <h1 className="mb-1 text-xl font-semibold">✓ {name} approved</h1>
         <p className="text-sm">Send them their personal Flyer Tours link:</p>
@@ -438,6 +496,402 @@ function ApprovedScreen({ name, url, onDone }: { name: string; url: string; onDo
           Back to registrations
         </button>
       </div>
-    </Shell>
+    </>
+  );
+}
+
+/* ===================== Routes (Route Builder) ===================== */
+
+function RoutesSection() {
+  const [routes, setRoutes] = useState<FlyerRouteDoc[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  // null = showing the list, "new" = creating, otherwise the route id being edited.
+  const [editingId, setEditingId] = useState<string | "new" | null>(null);
+
+  useEffect(() => {
+    return onSnapshot(
+      collection(db, "flyerRoutes"),
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as FlyerRouteDoc);
+        rows.sort((a, b) => a.region.localeCompare(b.region) || a.name.localeCompare(b.name));
+        setRoutes(rows);
+        setListError(null);
+      },
+      (err) => {
+        console.error("[admin] routes listener failed:", err);
+        setListError(err.code === "permission-denied" ? "Permission denied loading routes." : err.message);
+      }
+    );
+  }, []);
+
+  if (editingId !== null) {
+    const existing = editingId === "new" ? null : (routes?.find((r) => r.id === editingId) ?? null);
+    return (
+      <RouteEditor
+        route={existing}
+        knownRegions={Array.from(new Set((routes ?? []).map((r) => r.region))).sort()}
+        onBack={() => setEditingId(null)}
+      />
+    );
+  }
+
+  const grouped = new Map<string, FlyerRouteDoc[]>();
+  for (const r of routes ?? []) {
+    const list = grouped.get(r.region) ?? [];
+    list.push(r);
+    grouped.set(r.region, list);
+  }
+
+  return (
+    <>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="text-sm text-[#5C5850]">Flyering tours, grouped by region</p>
+        <button
+          type="button"
+          onClick={() => setEditingId("new")}
+          className="shrink-0 rounded-full bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white"
+        >
+          + New Route
+        </button>
+      </div>
+
+      {listError && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {listError}
+        </div>
+      )}
+
+      {routes === null && !listError && <p className="text-[#5C5850]">Loading…</p>}
+      {routes?.length === 0 && (
+        <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>No routes yet. Create the first one.</div>
+      )}
+
+      <div className="space-y-5">
+        {Array.from(grouped.entries()).map(([region, regionRoutes]) => (
+          <div key={region}>
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[#8A857A]">{region}</h2>
+            <ul className="space-y-3">
+              {regionRoutes.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(r.id)}
+                    className={`${cardClass} block w-full p-4 text-left active:bg-[#FBF9F4]`}
+                  >
+                    <span className="block text-base font-semibold">{r.name}</span>
+                    <span className="mt-1 block text-sm text-[#5C5850]">
+                      {r.spots?.length ?? 0} spot{(r.spots?.length ?? 0) === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+const spotTextInput =
+  "block w-full rounded-lg border border-[#E2DFD6] bg-white px-3 py-2 text-sm text-[#201E1B] focus:border-[#201E1B] focus:outline-none";
+
+function RouteEditor({
+  route,
+  knownRegions,
+  onBack,
+}: {
+  route: FlyerRouteDoc | null;
+  knownRegions: string[];
+  onBack: () => void;
+}) {
+  const [region, setRegion] = useState(route?.region ?? "");
+  const [name, setName] = useState(route?.name ?? "");
+  const [spots, setSpots] = useState<RouteSpot[]>(route?.spots?.length ? route.spots : [blankSpot()]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  function updateSpot(i: number, patch: Partial<RouteSpot>) {
+    setSpots((prev) => prev.map((sp, idx) => (idx === i ? { ...sp, ...patch } : sp)));
+  }
+
+  function removeSpot(i: number) {
+    setSpots((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  function moveSpot(i: number, dir: -1 | 1) {
+    setSpots((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }
+
+  function validate(): string | null {
+    if (!region.trim()) return "Region is required.";
+    if (!name.trim()) return "Route name is required.";
+    if (spots.length === 0) return "Add at least one spot.";
+    if (spots.some((sp) => !sp.name.trim())) return "Every spot needs a name.";
+    return null;
+  }
+
+  function cleanedSpots(): RouteSpot[] {
+    return spots.map((sp) => ({
+      name: sp.name.trim(),
+      type: sp.type,
+      time: sp.time.trim(),
+      comment: sp.comment.trim(),
+      mapsLink: sp.mapsLink?.trim() || null,
+    }));
+  }
+
+  async function save() {
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      if (route) {
+        await updateDoc(doc(db, "flyerRoutes", route.id), {
+          region: region.trim(),
+          name: name.trim(),
+          spots: cleanedSpots(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await addDoc(collection(db, "flyerRoutes"), {
+          region: region.trim(),
+          name: name.trim(),
+          spots: cleanedSpots(),
+          duplicatedFrom: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      onBack();
+    } catch (err) {
+      console.error("[admin] route save failed:", err);
+      setError("Saving failed. Please try again.");
+      setSaving(false);
+    }
+  }
+
+  async function duplicate() {
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await addDoc(collection(db, "flyerRoutes"), {
+        region: region.trim(),
+        name: `${name.trim()} (Copy)`,
+        spots: cleanedSpots(),
+        duplicatedFrom: route?.id ?? null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      onBack();
+    } catch (err) {
+      console.error("[admin] route duplicate failed:", err);
+      setError("Duplicating failed. Please try again.");
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!route) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await deleteDoc(doc(db, "flyerRoutes", route.id));
+      onBack();
+    } catch (err) {
+      console.error("[admin] route delete failed:", err);
+      setError("Deleting failed. Please try again.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" onClick={onBack} className="mb-4 text-sm text-[#5C5850] underline">
+        ← Back to routes
+      </button>
+
+      <div className={`${cardClass} mb-5 space-y-4 p-4`}>
+        <div>
+          <label htmlFor="route-region" className="mb-1 block text-sm font-medium">
+            Region
+          </label>
+          <input
+            id="route-region"
+            type="text"
+            list="known-regions"
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            placeholder="e.g. Haad Rin"
+            className={spotTextInput}
+          />
+          <datalist id="known-regions">
+            {knownRegions.map((r) => (
+              <option key={r} value={r} />
+            ))}
+          </datalist>
+        </div>
+        <div>
+          <label htmlFor="route-name" className="mb-1 block text-sm font-medium">
+            Route name
+          </label>
+          <input
+            id="route-name"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Starter"
+            className={spotTextInput}
+          />
+        </div>
+      </div>
+
+      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[#8A857A]">Spots</h2>
+      <div className="mb-4 space-y-3">
+        {spots.map((sp, i) => (
+          <div key={i} className={`${cardClass} space-y-3 p-4`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-[#8A857A]">#{i + 1}</span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => moveSpot(i, -1)}
+                  disabled={i === 0}
+                  aria-label="Move up"
+                  className="rounded-lg border border-[#E2DFD6] px-2 py-1 text-sm disabled:opacity-30"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveSpot(i, 1)}
+                  disabled={i === spots.length - 1}
+                  aria-label="Move down"
+                  className="rounded-lg border border-[#E2DFD6] px-2 py-1 text-sm disabled:opacity-30"
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeSpot(i)}
+                  aria-label="Remove spot"
+                  className="rounded-lg border border-red-300 px-2 py-1 text-sm text-red-700"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <input
+              type="text"
+              value={sp.name}
+              onChange={(e) => updateSpot(i, { name: e.target.value })}
+              placeholder="Spot name"
+              className={spotTextInput}
+            />
+
+            <div className="flex gap-2">
+              {(Object.keys(SPOT_TYPE_LABELS) as SpotType[]).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => updateSpot(i, { type: t })}
+                  className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold ${
+                    sp.type === t
+                      ? "border-[#201E1B] bg-[#201E1B] text-white"
+                      : "border-[#E2DFD6] bg-white text-[#5C5850]"
+                  }`}
+                >
+                  {SPOT_TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+
+            <input
+              type="text"
+              value={sp.time}
+              onChange={(e) => updateSpot(i, { time: e.target.value })}
+              placeholder="Time (e.g. 7:00 – 8:00 PM)"
+              className={spotTextInput}
+            />
+
+            <textarea
+              value={sp.comment}
+              onChange={(e) => updateSpot(i, { comment: e.target.value })}
+              placeholder="Instructions for the volunteer"
+              rows={2}
+              className={spotTextInput}
+            />
+
+            <input
+              type="text"
+              value={sp.mapsLink ?? ""}
+              onChange={(e) => updateSpot(i, { mapsLink: e.target.value })}
+              placeholder="Google Maps link (optional)"
+              className={spotTextInput}
+            />
+          </div>
+        ))}
+
+        <button
+          type="button"
+          onClick={() => setSpots((prev) => [...prev, blankSpot()])}
+          className={secondaryButton}
+        >
+          + Add Spot
+        </button>
+      </div>
+
+      {error && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <button type="button" onClick={save} disabled={saving} className={primaryButton}>
+          {saving ? "Saving…" : route ? "Save Changes" : "Create Route"}
+        </button>
+        {route && (
+          <button type="button" onClick={duplicate} disabled={saving} className={secondaryButton}>
+            Duplicate as New Route
+          </button>
+        )}
+        {route && (
+          <button
+            type="button"
+            onClick={remove}
+            disabled={saving}
+            className={
+              confirmDelete
+                ? "w-full rounded-2xl border border-red-600 bg-red-50 px-4 py-4 text-base font-semibold text-red-800 disabled:opacity-40"
+                : secondaryButton
+            }
+          >
+            {saving ? "Deleting…" : confirmDelete ? "Tap again to confirm delete" : "Delete Route"}
+          </button>
+        )}
+      </div>
+    </>
   );
 }
