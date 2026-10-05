@@ -109,10 +109,13 @@ function progressDocId(token: string, route: FlyerRoute) {
   return `${token}_${sanitizeForId(route.region)}_${sanitizeForId(route.id)}`;
 }
 
-/** Midnight at the start of tomorrow, in the browser's local time. */
-function tomorrowMidnight(): Timestamp {
-  const now = new Date();
-  return Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+/**
+ * Tour proof photos are deleted 48h after upload by the Cloud Function
+ * cleanupExpiredFlyerProofs (which goes by uploadedAt / the file's age, not
+ * this field — informational only).
+ */
+function proofDeleteAfter(): Timestamp {
+  return Timestamp.fromMillis(Date.now() + 48 * 60 * 60 * 1000);
 }
 
 function countOpenBetween(spots: Spot[], statusMap: Record<number, SpotStatus>, fromExclusive: number, toExclusive: number) {
@@ -381,7 +384,7 @@ export default function TourPortalClient({ token }: { token: string }) {
         spotIndex,
         storagePath,
         uploadedAt: serverTimestamp(),
-        deleteAfter: tomorrowMidnight(),
+        deleteAfter: proofDeleteAfter(),
       });
 
       setUploadState((s) => ({ ...s, [spotIndex]: "success" }));

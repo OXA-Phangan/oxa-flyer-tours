@@ -29,7 +29,8 @@ type Registration = {
   checkInTime: string | null;
   checkOutDate: string;
   checkOutTime: string | null;
-  passportPhotoPath: string;
+  // null once the retention job (Cloud Function cleanupExpiredFlyerPassports) has deleted the photo.
+  passportPhotoPath: string | null;
   depositAcknowledged: boolean;
   submittedAt: Timestamp | null;
 };
@@ -434,6 +435,10 @@ function RegistrationDetail({
 
   useEffect(() => {
     let cancelled = false;
+    if (!r.passportPhotoPath) {
+      setPhotoError(true);
+      return;
+    }
     getDownloadURL(ref(storage, r.passportPhotoPath))
       .then((url) => !cancelled && setPhotoUrl(url))
       .catch((err) => {

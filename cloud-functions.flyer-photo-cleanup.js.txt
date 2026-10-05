@@ -1,0 +1,121 @@
+
+// =====================================================================
+// OXA Flyer Tours — photo retention (separate app, same Firebase project)
+// Source: github.com/OXA-Phangan/oxa-flyer-tours (cloud-functions.flyer-photo-cleanup.js.txt)
+//
+// Two scheduled jobs, same shape as cleanupExpiredTimeSessionPhotos /
+// cleanupExpiredTaskProofPhotos above. Both run under the Admin SDK, so they
+// bypass storage.rules / firestore.rules. Every deletion is logged
+// (functions:log) so the first runs can be checked.
+//
+//  - Passport photos: deleted FLYER_PASSPORT_GRACE_DAYS (7) after the
+//    volunteer's check-out date. For approved volunteers the deadline lives
+//    on flyerVolunteers/{token}.passportDeleteAfter (admin recomputes it when
+//    a stay change is approved). Registrations that were never approved
+//    (pending / rejected) have no volunteer doc, so they use their own
+//    checkOutDate. Passport files that no registration or volunteer points
+//    to any more (uploaded on /register, form never submitted) are removed
+//    after FLYER_ORPHAN_GRACE_HOURS (48).
+//  - Tour proof photos (flyerProofs): deleted FLYER_PROOF_RETENTION_HOURS
+//    (48) after upload — file AND its flyerProofs doc. Goes by the Storage
+//    object's creation time and the doc's uploadedAt, NOT the client-written
+//    deleteAfter field (client-controlled, and older docs carry a shorter
+//    value). Runs every 6 hours so the real lifetime is at most ~54h.
+// =====================================================================
+const FLYER_PASSPORT_GRACE_DAYS = 7;
+const FLYER_ORPHAN_GRACE_HOURS = 48;
+const FLYER_PROOF_RETENTION_HOURS = 48;
+const FLYER_HOUR_MS = 60 * 60 * 1000;
+const FLYER_BANGKOK_OFFSET_MS = 7 * FLYER_HOUR_MS; // Thailand has no DST
+
+/** "YYYY-MM-DD" -> ms of that date's 00:00 in Asia/Bangkok, or null if unparsable. */
+function flyerBangkokMidnightMs(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof dateStr === "string" ? dateStr : "");
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - FLYER_BANGKOK_OFFSET_MS;
+}
+
+async function flyerDeleteFile(bucket, path) {
+  if (!path) return;
+  await bucket.file(path).delete({ ignoreNotFound: true });
+  console.log(`[flyer-cleanup] deleted file ${path}`);
+}
+
+exports.cleanupExpiredFlyerPassports = onSchedule(
+  { schedule: "every 24 hours", timeZone: "Asia/Bangkok" },
+  async () => {
+    const db = getFirestore();
+    const bucket = getStorage().bucket();
+    const now = Date.now();
+
+    // 1. Approved volunteers — deadline stored on the doc.
+    const volunteers = await db
+      .collection("flyerVolunteers")
+      .where("passportDeleteAfter", "<=", Timestamp.fromMillis(now))
+      .get();
+    for (const doc of volunteers.docs) {
+      await flyerDeleteFile(bucket, doc.get("passportPhotoPath"));
+      await doc.ref.update({
+        passportPhotoPath: null,
+        passportDeleteAfter: null,
+        passportDeletedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    // 2. Registrations that never became a volunteer (pending / rejected).
+    // Approved ones are skipped: their volunteer doc owns the deadline, and
+    // a stay change may have pushed check-out past this doc's checkOutDate.
+    const registrations = await db.collection("flyerRegistrations").where("passportPhotoPath", "!=", null).get();
+    for (const doc of registrations.docs) {
+      const data = doc.data();
+      if (data.status === "approved") continue;
+      const checkOutMs = flyerBangkokMidnightMs(data.checkOutDate);
+      if (checkOutMs === null) continue;
+      if (checkOutMs + FLYER_PASSPORT_GRACE_DAYS * 24 * FLYER_HOUR_MS > now) continue;
+      await flyerDeleteFile(bucket, data.passportPhotoPath);
+      await doc.ref.update({ passportPhotoPath: null, passportDeletedAt: FieldValue.serverTimestamp() });
+    }
+
+    // 3. Orphans — referenced by nothing (computed AFTER 1 and 2 cleared their refs).
+    const referenced = new Set();
+    for (const col of ["flyerRegistrations", "flyerVolunteers"]) {
+      const snap = await db.collection(col).where("passportPhotoPath", "!=", null).get();
+      snap.docs.forEach((d) => referenced.add(d.get("passportPhotoPath")));
+    }
+    const orphanCutoffMs = now - FLYER_ORPHAN_GRACE_HOURS * FLYER_HOUR_MS;
+    const [files] = await bucket.getFiles({ prefix: "flyerPassports/" });
+    for (const file of files) {
+      if (referenced.has(file.name)) continue;
+      const createdMs = Date.parse(file.metadata && file.metadata.timeCreated);
+      if (!Number.isFinite(createdMs) || createdMs > orphanCutoffMs) continue;
+      await flyerDeleteFile(bucket, file.name);
+    }
+  }
+);
+
+exports.cleanupExpiredFlyerProofs = onSchedule(
+  { schedule: "every 6 hours", timeZone: "Asia/Bangkok" },
+  async () => {
+    const db = getFirestore();
+    const bucket = getStorage().bucket();
+    const cutoffMs = Date.now() - FLYER_PROOF_RETENTION_HOURS * FLYER_HOUR_MS;
+
+    // Files first, by object age — also catches uploads whose doc was never written.
+    const [files] = await bucket.getFiles({ prefix: "flyerProofs/" });
+    for (const file of files) {
+      const createdMs = Date.parse(file.metadata && file.metadata.timeCreated);
+      if (!Number.isFinite(createdMs) || createdMs > cutoffMs) continue;
+      await flyerDeleteFile(bucket, file.name);
+    }
+
+    // Then the matching proof docs.
+    const docs = await db
+      .collection("flyerProofs")
+      .where("uploadedAt", "<=", Timestamp.fromMillis(cutoffMs))
+      .get();
+    for (const doc of docs.docs) {
+      await flyerDeleteFile(bucket, doc.get("storagePath"));
+      await doc.ref.delete();
+    }
+  }
+);
