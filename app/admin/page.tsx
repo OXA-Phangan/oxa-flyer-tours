@@ -227,10 +227,75 @@ export default function AdminPage() {
   return <Dashboard adminEmail={user.email ?? user.uid} />;
 }
 
-function Dashboard({ adminEmail }: { adminEmail: string }) {
-  const [tab, setTab] = useState<"registrations" | "routes" | "crew" | "group-chat" | "supplies">("registrations");
+/* ---- URL-addressable admin views (tab + route) ----
+   Plain History API on purpose: real <a href> links (so right-click ->
+   "Open in new tab", reload and the Back button work) without depending on
+   Next's routing hooks. Normal left-clicks are intercepted and handled
+   in-page; modified clicks fall through to the browser. */
 
-  const tabs: { key: typeof tab; label: string }[] = [
+const ADMIN_NAV_EVENT = "oxa-admin-nav";
+
+function readAdminLocation(): { tab: string | null; route: string | null } {
+  const p = new URLSearchParams(window.location.search);
+  return { tab: p.get("tab"), route: p.get("route") };
+}
+
+function adminHref(tab: string, route?: string | null): string {
+  const p = new URLSearchParams({ tab });
+  if (route) p.set("route", route);
+  return `/admin?${p.toString()}`;
+}
+
+function navigateAdmin(href: string) {
+  window.history.pushState(null, "", href);
+  window.dispatchEvent(new Event(ADMIN_NAV_EVENT));
+}
+
+function useAdminLocation() {
+  // Only rendered after sign-in (client-side), so reading window here is safe;
+  // the typeof guard just keeps any server render from throwing.
+  const [loc, setLoc] = useState(() =>
+    typeof window === "undefined" ? { tab: null, route: null } : readAdminLocation()
+  );
+  useEffect(() => {
+    const sync = () => setLoc(readAdminLocation());
+    window.addEventListener("popstate", sync);
+    window.addEventListener(ADMIN_NAV_EVENT, sync);
+    sync();
+    return () => {
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener(ADMIN_NAV_EVENT, sync);
+    };
+  }, []);
+  return loc;
+}
+
+function AdminLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
+  return (
+    <a
+      href={href}
+      className={className}
+      onClick={(e) => {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        navigateAdmin(href);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+const DASHBOARD_TABS = ["registrations", "routes", "crew", "group-chat", "supplies"] as const;
+type DashboardTab = (typeof DASHBOARD_TABS)[number];
+
+function Dashboard({ adminEmail }: { adminEmail: string }) {
+  const { tab: urlTab } = useAdminLocation();
+  const tab: DashboardTab = (DASHBOARD_TABS as readonly string[]).includes(urlTab ?? "")
+    ? (urlTab as DashboardTab)
+    : "registrations";
+
+  const tabs: { key: DashboardTab; label: string }[] = [
     { key: "registrations", label: "Registrations" },
     { key: "routes", label: "Routes" },
     { key: "crew", label: "Crew" },
@@ -243,16 +308,15 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div className="flex gap-2 rounded-full bg-[#E2DFD6] p-1">
           {tabs.map((t) => (
-            <button
+            <AdminLink
               key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
+              href={adminHref(t.key)}
               className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
                 tab === t.key ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
               }`}
             >
               {t.label}
-            </button>
+            </AdminLink>
           ))}
         </div>
         <button type="button" onClick={() => signOut(auth)} className="pt-2 text-sm text-[#5C5850] underline">
@@ -570,8 +634,10 @@ function ApprovedScreen({ name, url, onDone }: { name: string; url: string; onDo
 function RoutesSection() {
   const [routes, setRoutes] = useState<FlyerRouteDoc[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  // null = showing the list, "new" = creating, otherwise the route id being edited.
-  const [editingId, setEditingId] = useState<string | "new" | null>(null);
+  // From the URL (?tab=routes&route=...): null = showing the list,
+  // "new" = creating, otherwise the route id being edited.
+  const { route: editingId } = useAdminLocation();
+  const backToList = () => navigateAdmin(adminHref("routes"));
 
   useEffect(() => {
     return onSnapshot(
@@ -591,11 +657,28 @@ function RoutesSection() {
 
   if (editingId !== null) {
     const existing = editingId === "new" ? null : (routes?.find((r) => r.id === editingId) ?? null);
+    // Deep link to a route: wait for the list to load, and don't silently fall
+    // back to a blank "new route" editor if the id doesn't exist (e.g. deleted).
+    if (editingId !== "new" && !existing) {
+      return routes === null && !listError ? (
+        <p className="text-[#5C5850]">Loading…</p>
+      ) : (
+        <>
+          <AdminLink href={adminHref("routes")} className="mb-4 inline-block text-sm text-[#5C5850] underline">
+            ← Back to routes
+          </AdminLink>
+          <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
+            {listError ?? "This route doesn't exist (it may have been deleted)."}
+          </div>
+        </>
+      );
+    }
     return (
       <RouteEditor
+        key={editingId}
         route={existing}
         knownRegions={Array.from(new Set((routes ?? []).map((r) => r.region))).sort()}
-        onBack={() => setEditingId(null)}
+        onBack={backToList}
       />
     );
   }
@@ -611,13 +694,12 @@ function RoutesSection() {
     <>
       <div className="mb-4 flex items-center justify-between gap-3">
         <p className="text-sm text-[#5C5850]">Flyering tours, grouped by region</p>
-        <button
-          type="button"
-          onClick={() => setEditingId("new")}
+        <AdminLink
+          href={adminHref("routes", "new")}
           className="shrink-0 rounded-full bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white"
         >
           + New Route
-        </button>
+        </AdminLink>
       </div>
 
       {listError && (
@@ -638,16 +720,15 @@ function RoutesSection() {
             <ul className="space-y-3">
               {regionRoutes.map((r) => (
                 <li key={r.id}>
-                  <button
-                    type="button"
-                    onClick={() => setEditingId(r.id)}
+                  <AdminLink
+                    href={adminHref("routes", r.id)}
                     className={`${cardClass} block w-full p-4 text-left active:bg-[#FBF9F4]`}
                   >
                     <span className="block text-base font-semibold">{r.name}</span>
                     <span className="mt-1 block text-sm text-[#5C5850]">
                       {r.spots?.length ?? 0} spot{(r.spots?.length ?? 0) === 1 ? "" : "s"}
                     </span>
-                  </button>
+                  </AdminLink>
                 </li>
               ))}
             </ul>
