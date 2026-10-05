@@ -1,5 +1,14 @@
 rules_version = '2';
 
+// !!! DO NOT DEPLOY THIS FILE !!!
+// One Firebase project (oxa-ticket-app) = ONE Firestore ruleset, shared by
+// ticket app, poster tour, employee portal and flyer tours. The source of
+// truth is oxa-ticket-app/firestore.rules; deploying this stale copy would
+// wipe newer employee-portal/poster rules. Flyer rules live there too — the
+// flyer section is kept in firestore.flyer-block.rules.txt (same repo) as the
+// paste-in block. Edit it here, then copy it into oxa-ticket-app and deploy
+// from that repo.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 

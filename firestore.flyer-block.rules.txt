@@ -1,0 +1,72 @@
+    // ---- OXA Flyer Tours (separate app, same Firebase project) ----
+    // See github.com/OXA-Phangan/oxa-flyer-tours. Short-term flyer
+    // volunteers (max ~2 weeks), never entered into `employees` — access
+    // is a per-volunteer, unique-link token (flyerVolunteers/{token}),
+    // not Google Sign-In like every other app above. Admin access uses
+    // a distinct `flyerAdmin` custom claim (isFlyerAdmin() below) rather
+    // than the shared isAdmin()/isPortalManagement() helpers above, since
+    // this is a deliberately separate access domain.
+    function isFlyerAdmin() {
+      return isSignedIn() &&
+             (request.auth.token.flyerAdmin == true ||
+              request.auth.token.email.lower() in
+                ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com', 'mobit.booking@gmail.com']);
+    }
+
+    match /flyerRegistrations/{regId} {
+      allow create: if request.resource.data.status == "pending"
+                    && request.resource.data.name is string
+                    && request.resource.data.checkInDate is string
+                    && request.resource.data.checkOutDate is string;
+      allow read, update, delete: if isFlyerAdmin();
+    }
+
+    match /flyerRoutes/{routeId} {
+      allow get, list: if true;
+      allow create, update, delete: if isFlyerAdmin();
+    }
+
+    match /flyerVolunteers/{token} {
+      allow get: if true;
+      allow list: if isFlyerAdmin();
+      allow create: if isFlyerAdmin();
+      allow update: if isFlyerAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["pendingStayEdit", "hasPendingStayEdit", "onBreak"])
+      );
+      allow delete: if isFlyerAdmin();
+
+      match /shifts/{shiftId} {
+        allow get, list: if true;
+        allow write: if isFlyerAdmin();
+      }
+    }
+
+    match /flyerTourProgress/{progressId} {
+      allow get, write: if true;
+      allow list: if isFlyerAdmin();
+    }
+
+    match /flyerProofs/{proofId} {
+      allow create: if request.resource.data.volunteerId is string;
+      allow get: if true;
+      allow list, delete: if isFlyerAdmin();
+    }
+
+    match /flyerChatThreads/{token} {
+      allow get, update: if true;
+      allow list, create: if isFlyerAdmin();
+      match /messages/{messageId} {
+        allow get, list, create: if true;
+      }
+    }
+
+    match /flyerGroupMessages/{messageId} {
+      allow get, list, create: if true;
+      allow update, delete: if isFlyerAdmin();
+    }
+
+    match /flyerSupplyReports/{reportId} {
+      allow create: if request.resource.data.volunteerId is string;
+      allow get, list, update: if isFlyerAdmin();
+    }
