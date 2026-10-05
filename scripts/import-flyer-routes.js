@@ -7,6 +7,10 @@
 //   GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json node scripts/import-flyer-routes.js
 // (PowerShell): $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\serviceAccountKey.json"; node scripts/import-flyer-routes.js
 //
+// No key file needed if your org blocks service-account key creation:
+//   gcloud auth application-default login
+// then just: node scripts/import-flyer-routes.js
+//
 // Uses firebase-admin's modular API (require("firebase-admin/app") /
 // require("firebase-admin/firestore")) rather than the older namespaced
 // `admin.initializeApp()` / `admin.credential` style — the namespaced style
@@ -22,7 +26,9 @@ const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { routesToImport } = require("./flyer-routes-data");
 
-initializeApp({ credential: applicationDefault() });
+// projectId is set explicitly so this also works with user-login ADC
+// (`gcloud auth application-default login`), which carries no project of its own.
+initializeApp({ credential: applicationDefault(), projectId: "oxa-ticket-app" });
 const db = getFirestore();
 
 async function main() {
