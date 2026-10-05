@@ -1,0 +1,47 @@
+# Run from inside the oxa-poster-tour folder. Only ADDS the flyer blocks; aborts on anything unexpected.
+$ErrorActionPreference = "Stop"
+$flyer = Join-Path (Split-Path -Parent (Get-Location).Path) "oxa-flyer-tours"
+if (-not (Test-Path "$flyer\storage.flyer-block.rules.txt")) { throw "oxa-flyer-tours nicht neben diesem Ordner gefunden" }
+if (-not (Test-Path ".\storage.rules") -or -not (Test-Path ".\functions\index.js")) { throw "Bitte im Ordner oxa-poster-tour ausfuehren" }
+$enc = New-Object System.Text.UTF8Encoding($false)
+
+# --- storage.rules ---
+$sp = (Resolve-Path ".\storage.rules").Path
+$s = [System.IO.File]::ReadAllText($sp)
+$blk = [System.IO.File]::ReadAllText("$flyer\storage.flyer-block.rules.txt").TrimEnd()
+if ($s -match "isFlyerAdmin") {
+  Write-Host "STORAGE: Flyer-Block ist schon drin - nichts geaendert"
+} else {
+  $m = [regex]::Match($s, '(\r?\n)  \}\s*\}\s*$')
+  if (-not $m.Success) { throw "STORAGE: Dateiende unerwartet - ABBRUCH, nichts geaendert" }
+  Copy-Item $sp "$sp.bak"
+  $nl = $m.Groups[1].Value
+  $new = $s.Substring(0, $m.Index) + $nl + $nl + ($blk -replace "`r?`n", $nl) + $s.Substring($m.Index)
+  [System.IO.File]::WriteAllText($sp, $new, $enc)
+  Write-Host "STORAGE: Block eingefuegt"
+}
+
+# --- functions/index.js ---
+$fp = (Resolve-Path ".\functions\index.js").Path
+$f = [System.IO.File]::ReadAllText($fp)
+$snip = [System.IO.File]::ReadAllText("$flyer\cloud-functions.flyer-photo-cleanup.js.txt")
+if ($f -match "cleanupExpiredFlyerPassports") {
+  Write-Host "FUNCTIONS: Snippet ist schon drin - nichts geaendert"
+} else {
+  $missing = @("onSchedule","getFirestore","getStorage","Timestamp","FieldValue") | Where-Object { $f -notmatch $_ }
+  if ($missing) { throw "FUNCTIONS: fehlende Imports: $missing - ABBRUCH, nichts geaendert" }
+  Copy-Item $fp "$fp.bak"
+  [System.IO.File]::WriteAllText($fp, $f.TrimEnd() + "`n" + $snip, $enc)
+  Write-Host "FUNCTIONS: Snippet angehaengt"
+}
+
+# --- Kontrolle ---
+Write-Host ""
+git diff --stat
+$removed = git diff -U0 | Select-String '^-[^-]'
+if ($removed) {
+  Write-Host "ACHTUNG: Zeilen wurden entfernt - NICHT deployen:" -ForegroundColor Red
+  $removed
+} else {
+  Write-Host "OK: nur hinzugefuegte Zeilen (siehe Statistik oben)" -ForegroundColor Green
+}
