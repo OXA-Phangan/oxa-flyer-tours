@@ -1,5 +1,11 @@
 rules_version = '2';
 
+// !!! Source of truth for Storage rules is oxa-poster-tour/storage.rules !!!
+// One Firebase project = one Storage ruleset. The flyer section is kept in
+// storage.flyer-block.rules.txt (same repo) as the paste-in block for that
+// repo. Deploy Storage rules from oxa-poster-tour, not from here, so the two
+// copies can't drift and silently wipe each other's paths.
+
 // Shared Storage bucket with oxa-ticket-app (same Firebase project,
 // "oxa-ticket-app.firebasestorage.app") — oxa-ticket-app doesn't use
 // Storage today (no existing storage.rules to merge with), so this is the

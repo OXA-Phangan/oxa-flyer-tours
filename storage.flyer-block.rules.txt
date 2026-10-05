@@ -1,0 +1,30 @@
+    // ---- OXA Flyer Tours (separate app, same Firebase project) ----
+    // Duplicated locally since Storage rules can't reference Firestore
+    // rules functions — same pattern as isPosterManagement()/
+    // isPortalManagement() above. Keep in sync with firestore.rules'
+    // isFlyerAdmin() if the claim name ever changes.
+    function isFlyerAdmin() {
+      return isSignedIn() &&
+             (request.auth.token.flyerAdmin == true ||
+              request.auth.token.email.lower() in
+                ['info@oxaphangan.com', 'bella.oxaphangan@gmail.com', 'mobit.booking@gmail.com']);
+    }
+
+    // Passport photos — path shape: flyerPassports/{token}/passport.jpg
+    // get per known token (exact path) is allowed, list (directory
+    // enumeration) is admin-only — same "token = access, no browsing"
+    // model as the Firestore rules.
+    match /flyerPassports/{token}/{fileName} {
+      allow get: if true;
+      allow list: if isFlyerAdmin();
+      allow write: if true;
+      allow delete: if isFlyerAdmin();
+    }
+
+    // Tour proof photos — path shape: flyerProofs/{token}/{proofId}.jpg
+    match /flyerProofs/{token}/{fileName} {
+      allow get: if true;
+      allow list: if isFlyerAdmin();
+      allow write: if true;
+      allow delete: if isFlyerAdmin();
+    }
