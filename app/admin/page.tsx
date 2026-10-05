@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import {
   addDoc,
@@ -43,6 +43,8 @@ type RouteSpot = {
   comment: string;
   mapsLink: string | null;
 };
+
+type EditorSpot = RouteSpot & { _k: number };
 
 type FlyerRouteDoc = {
   id: string;
@@ -670,10 +672,33 @@ function RouteEditor({
 }) {
   const [region, setRegion] = useState(route?.region ?? "");
   const [name, setName] = useState(route?.name ?? "");
-  const [spots, setSpots] = useState<RouteSpot[]>(route?.spots?.length ? route.spots : [blankSpot()]);
+  // Each spot gets a stable client-side key (_k) so a moved card keeps its
+  // identity (and we can scroll to it). Stripped again in cleanedSpots().
+  const keyCounter = useRef(0);
+  const withKey = (sp: RouteSpot): EditorSpot => ({
+    ...sp,
+    // Imported routes may have comment: null (and older docs may lack fields).
+    comment: sp.comment ?? "",
+    time: sp.time ?? "",
+    _k: keyCounter.current++,
+  });
+  const [spots, setSpots] = useState<EditorSpot[]>(() =>
+    (route?.spots?.length ? route.spots : [blankSpot()]).map(withKey)
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // After a move, keep the moved card at the same spot on screen so repeated
+  // taps keep moving the same entry instead of whatever slid under the finger.
+  const pendingScroll = useRef<{ k: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const p = pendingScroll.current;
+    if (!p) return;
+    pendingScroll.current = null;
+    const el = document.getElementById(`spot-card-${p.k}`);
+    if (el) window.scrollBy(0, el.getBoundingClientRect().top - p.top);
+  }, [spots]);
 
   function updateSpot(i: number, patch: Partial<RouteSpot>) {
     setSpots((prev) => prev.map((sp, idx) => (idx === i ? { ...sp, ...patch } : sp)));
@@ -683,14 +708,21 @@ function RouteEditor({
     setSpots((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  function moveSpot(i: number, dir: -1 | 1) {
+  function moveSpotTo(i: number, target: number) {
+    if (target < 0 || target >= spots.length || target === i) return;
+    const k = spots[i]._k;
+    const el = document.getElementById(`spot-card-${k}`);
+    if (el) pendingScroll.current = { k, top: el.getBoundingClientRect().top };
     setSpots((prev) => {
-      const j = i + dir;
-      if (j < 0 || j >= prev.length) return prev;
       const next = [...prev];
-      [next[i], next[j]] = [next[j], next[i]];
+      const [item] = next.splice(i, 1);
+      next.splice(target, 0, item);
       return next;
     });
+  }
+
+  function moveSpot(i: number, dir: -1 | 1) {
+    moveSpotTo(i, i + dir);
   }
 
   function validate(): string | null {
@@ -705,8 +737,8 @@ function RouteEditor({
     return spots.map((sp) => ({
       name: sp.name.trim(),
       type: sp.type,
-      time: sp.time.trim(),
-      comment: sp.comment.trim(),
+      time: (sp.time ?? "").trim(),
+      comment: (sp.comment ?? "").trim(),
       mapsLink: sp.mapsLink?.trim() || null,
     }));
   }
@@ -832,9 +864,32 @@ function RouteEditor({
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[#8A857A]">Spots</h2>
       <div className="mb-4 space-y-3">
         {spots.map((sp, i) => (
-          <div key={i} className={`${cardClass} space-y-3 p-4`}>
+          <div key={sp._k} id={`spot-card-${sp._k}`} className={`${cardClass} space-y-3 p-4`}>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-semibold text-[#8A857A]">#{i + 1}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-[#8A857A]">#{i + 1}</span>
+                <label className="flex items-center gap-1 text-xs text-[#8A857A]">
+                  move to
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={spots.length}
+                    placeholder="#"
+                    aria-label="Move to position"
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      const n = parseInt((e.target as HTMLInputElement).value, 10);
+                      if (!Number.isNaN(n)) {
+                        moveSpotTo(i, Math.min(Math.max(n, 1), spots.length) - 1);
+                        (e.target as HTMLInputElement).value = "";
+                      }
+                    }}
+                    className="w-14 rounded-lg border border-[#E2DFD6] bg-white px-2 py-1 text-xs text-[#201E1B]"
+                  />
+                </label>
+              </div>
               <div className="flex gap-1">
                 <button
                   type="button"
@@ -918,7 +973,7 @@ function RouteEditor({
 
         <button
           type="button"
-          onClick={() => setSpots((prev) => [...prev, blankSpot()])}
+          onClick={() => setSpots((prev) => [...prev, withKey(blankSpot())])}
           className={secondaryButton}
         >
           + Add Spot

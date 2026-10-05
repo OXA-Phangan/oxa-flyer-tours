@@ -1193,7 +1193,9 @@ function ActiveSpotCard({
       <h2 className="mb-3 text-lg font-semibold">
         {index + 1}. {spot.name}
       </h2>
-      <div className="mb-4 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-sm leading-relaxed">{spot.comment}</div>
+      {spot.comment && (
+        <div className="mb-4 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-sm leading-relaxed">{spot.comment}</div>
+      )}
 
       {!resolvable && (
         <>
