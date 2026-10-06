@@ -1,0 +1,37 @@
+
+// =====================================================================
+// OXA Flyer Tours — automatic end of stay (separate app, same Firebase project)
+// Source: github.com/OXA-Phangan/oxa-flyer-tours (cloud-functions.flyer-volunteer-expiry.js.txt)
+//
+// Once the check-out DATE is in the past (Asia/Bangkok), an active volunteer
+// is set to "departed": the personal link then shows "Your stay has ended".
+// Same effect as the admin's "End stay now", minus the shift clean-up.
+// The passport/selfie retention (cleanupExpiredFlyerPassports) is untouched:
+// it runs off passportDeleteAfter = check-out + 7 days.
+// Runs daily shortly after midnight Bangkok time. Every change is logged.
+// =====================================================================
+exports.expireFlyerVolunteers = onSchedule(
+  { schedule: "every day 00:15", timeZone: "Asia/Bangkok" },
+  async () => {
+    const db = getFirestore();
+    const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10); // Bangkok date, no DST
+
+    // Equality filter only (no composite index needed); the date check is done here.
+    const snap = await db.collection("flyerVolunteers").where("status", "==", "active").get();
+    for (const doc of snap.docs) {
+      const checkOut = doc.get("checkOutDate");
+      if (typeof checkOut !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(checkOut)) continue;
+      if (checkOut >= today) continue;
+      await doc.ref.update({
+        status: "departed",
+        onBreak: false,
+        pendingStayEdit: null,
+        hasPendingStayEdit: false,
+        endedAt: FieldValue.serverTimestamp(),
+        endedAutomatically: true,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      console.log(`[flyer-expiry] ${doc.id} (${doc.get("name")}) departed, check-out was ${checkOut}`);
+    }
+  }
+);
