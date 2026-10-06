@@ -637,7 +637,7 @@ function VolunteerRow({
               type="button"
               aria-label={`Add shift for ${v.name} on ${d}`}
               onClick={() => onAdd(d)}
-              className="mt-auto h-7 rounded-lg text-sm text-[#8A857A] hover:bg-[#F1EFE8]"
+              className="mt-auto h-11 w-full rounded-lg border border-dashed border-[#CFC8B8] text-2xl font-semibold leading-none text-[#5C5850] hover:bg-[#F1EFE8]"
             >
               +
             </button>

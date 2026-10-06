@@ -237,9 +237,9 @@ export default function AdminPage() {
 
 const ADMIN_NAV_EVENT = "oxa-admin-nav";
 
-function readAdminLocation(): { tab: string | null; route: string | null } {
+function readAdminLocation(): { tab: string | null; route: string | null; sub: string | null } {
   const p = new URLSearchParams(window.location.search);
-  return { tab: p.get("tab"), route: p.get("route") };
+  return { tab: p.get("tab"), route: p.get("route"), sub: p.get("sub") };
 }
 
 function adminHref(tab: string, route?: string | null): string {
@@ -257,7 +257,7 @@ function useAdminLocation() {
   // Only rendered after sign-in (client-side), so reading window here is safe;
   // the typeof guard just keeps any server render from throwing.
   const [loc, setLoc] = useState(() =>
-    typeof window === "undefined" ? { tab: null, route: null } : readAdminLocation()
+    typeof window === "undefined" ? { tab: null, route: null, sub: null } : readAdminLocation()
   );
   useEffect(() => {
     const sync = () => setLoc(readAdminLocation());
@@ -288,52 +288,149 @@ function AdminLink({ href, className, children }: { href: string; className?: st
   );
 }
 
-const DASHBOARD_TABS = ["registrations", "routes", "crew", "shifts", "group-chat", "supplies"] as const;
+const DASHBOARD_TABS = ["crew", "routes", "chat", "supplies"] as const;
 type DashboardTab = (typeof DASHBOARD_TABS)[number];
+const CREW_SUBS = ["registrations", "volunteers", "shifts"] as const;
+type CrewSub = (typeof CREW_SUBS)[number];
+
+function crewHref(sub: CrewSub): string {
+  return `/admin?tab=crew&sub=${sub}`;
+}
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
-  const { tab: urlTab } = useAdminLocation();
-  const tab: DashboardTab = (DASHBOARD_TABS as readonly string[]).includes(urlTab ?? "")
-    ? (urlTab as DashboardTab)
-    : "registrations";
+  const { tab: urlTab, sub: urlSub } = useAdminLocation();
 
-  const tabs: { key: DashboardTab; label: string }[] = [
+  // Old bookmarks: ?tab=registrations / ?tab=shifts / ?tab=group-chat now live elsewhere.
+  let tab: DashboardTab = "crew";
+  let sub: CrewSub = "registrations";
+  if (urlTab === "registrations") {
+    sub = "registrations";
+  } else if (urlTab === "shifts") {
+    sub = "shifts";
+  } else if (urlTab === "group-chat") {
+    tab = "chat";
+  } else if ((DASHBOARD_TABS as readonly string[]).includes(urlTab ?? "")) {
+    tab = urlTab as DashboardTab;
+  }
+  if (tab === "crew" && (CREW_SUBS as readonly string[]).includes(urlSub ?? "")) {
+    sub = urlSub as CrewSub;
+  }
+
+  const tabs: { key: DashboardTab; label: string; href: string }[] = [
+    { key: "crew", label: "Crew", href: crewHref(sub) },
+    { key: "routes", label: "Routes", href: adminHref("routes") },
+    { key: "chat", label: "Chat", href: adminHref("chat") },
+    { key: "supplies", label: "Supplies", href: adminHref("supplies") },
+  ];
+  const subs: { key: CrewSub; label: string }[] = [
     { key: "registrations", label: "Registrations" },
-    { key: "routes", label: "Routes" },
-    { key: "crew", label: "Crew" },
+    { key: "volunteers", label: "Volunteers" },
     { key: "shifts", label: "Shifts" },
-    { key: "group-chat", label: "Group Chat" },
-    { key: "supplies", label: "Supplies" },
   ];
 
   return (
-    <Shell wide={tab === "shifts"}>
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div className="flex gap-2 rounded-full bg-[#E2DFD6] p-1">
+    <Shell wide={tab === "crew" && sub === "shifts"}>
+      <div className="sticky top-0 z-30 -mx-4 mb-4 bg-[#EFEDE7]/95 px-4 pb-3 pt-1 backdrop-blur">
+        <nav aria-label="Sections" className="grid max-w-md grid-cols-4 gap-1 rounded-full bg-[#E2DFD6] p-1">
           {tabs.map((t) => (
             <AdminLink
               key={t.key}
-              href={adminHref(t.key)}
-              className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
+              href={t.href}
+              className={`rounded-full px-1 py-2 text-center text-sm font-semibold ${
                 tab === t.key ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
               }`}
             >
               {t.label}
             </AdminLink>
           ))}
+        </nav>
+      </div>
+
+      {tab === "crew" && (
+        <div className="mb-5 flex max-w-md flex-wrap gap-2">
+          {subs.map((t) => (
+            <AdminLink
+              key={t.key}
+              href={crewHref(t.key)}
+              className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                sub === t.key
+                  ? "bg-[#201E1B] text-white"
+                  : "border border-[#E2DFD6] bg-white text-[#5C5850]"
+              }`}
+            >
+              {t.label}
+            </AdminLink>
+          ))}
         </div>
-        <button type="button" onClick={() => signOut(auth)} className="pt-2 text-sm text-[#5C5850] underline">
+      )}
+
+      <div className="pb-24">
+        {tab === "crew" && sub === "registrations" && <RegistrationsSection adminEmail={adminEmail} />}
+        {tab === "crew" && sub === "volunteers" && <CrewSection adminEmail={adminEmail} />}
+        {tab === "crew" && sub === "shifts" && <ShiftPlan adminEmail={adminEmail} />}
+        {tab === "routes" && <RoutesSection />}
+        {tab === "chat" && <GroupChatSection adminEmail={adminEmail} />}
+        {tab === "supplies" && <SupplyReportsSection />}
+
+        <button type="button" onClick={() => signOut(auth)} className="mt-10 text-sm text-[#5C5850] underline">
           Sign out
         </button>
       </div>
 
-      {tab === "registrations" && <RegistrationsSection adminEmail={adminEmail} />}
-      {tab === "routes" && <RoutesSection />}
-      {tab === "crew" && <CrewSection adminEmail={adminEmail} />}
-      {tab === "shifts" && <ShiftPlan adminEmail={adminEmail} />}
-      {tab === "group-chat" && <GroupChatSection adminEmail={adminEmail} />}
-      {tab === "supplies" && <SupplyReportsSection />}
+      <ShareRegistrationFooter />
     </Shell>
+  );
+}
+
+/** Sticky footer: share (phone share sheet) or copy the public registration link. */
+function ShareRegistrationFooter() {
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function share() {
+    const url = `${window.location.origin}/register`;
+    const nav = navigator as Navigator & {
+      share?: (data: { url: string; title?: string }) => Promise<void>;
+    };
+    if (typeof nav.share === "function") {
+      try {
+        await nav.share({ url, title: "Phangan-Flyer-Tours registration" });
+        return;
+      } catch (err) {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        // Any other failure: fall through to copying.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = url;
+      document.body.appendChild(input);
+      input.select();
+      const ok = document.execCommand("copy");
+      input.remove();
+      if (!ok) {
+        setStatus("failed");
+        setTimeout(() => setStatus("idle"), 3000);
+        return;
+      }
+    }
+    setStatus("copied");
+    setTimeout(() => setStatus("idle"), 2000);
+  }
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E2DFD6] bg-[#EFEDE7]/95 px-4 py-3 backdrop-blur">
+      <div className="mx-auto max-w-md">
+        <button type="button" onClick={share} className={primaryButton}>
+          {status === "copied"
+            ? "✓ Link copied"
+            : status === "failed"
+              ? "Couldn't copy — try again"
+              : "Share registration link"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -730,10 +827,10 @@ function RoutesSection() {
                 <li key={r.id}>
                   <AdminLink
                     href={adminHref("routes", r.id)}
-                    className={`${cardClass} block w-full p-4 text-left active:bg-[#FBF9F4]`}
+                    className={`${cardClass} flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left active:bg-[#FBF9F4]`}
                   >
-                    <span className="block text-base font-semibold">{r.name}</span>
-                    <span className="mt-1 block text-sm text-[#5C5850]">
+                    <span className="truncate text-base font-semibold">{r.name}</span>
+                    <span className="shrink-0 text-sm text-[#5C5850]">
                       {r.spots?.length ?? 0} spot{(r.spots?.length ?? 0) === 1 ? "" : "s"}
                     </span>
                   </AdminLink>
