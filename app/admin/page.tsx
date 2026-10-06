@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import {
   addDoc,
@@ -8,6 +8,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -24,6 +25,7 @@ import { FLYER_MANAGEMENT_EMAILS } from "@/lib/constants";
 import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
 import { bangkokToday } from "@/lib/shifts";
+import { readSeen, writeSeen } from "@/lib/chat-seen";
 
 type Registration = {
   id: string;
@@ -91,6 +93,17 @@ type ChatMessageDoc = {
   text: string;
   createdAt: Timestamp | null;
 };
+
+type ChatThreadDoc = {
+  id: string;
+  volunteerName?: string;
+  lastMessage?: string | null;
+  lastMessageAt?: Timestamp | null;
+  lastSenderRole?: ChatSenderRole | null;
+  unreadByAdmin?: boolean;
+};
+
+type GroupLatest = { ms: number; fromVolunteer: boolean; text: string; senderName: string };
 
 type SupplyReportStatus = "open" | "resolved";
 
@@ -248,9 +261,10 @@ function readAdminLocation(): { tab: string | null; route: string | null; sub: s
   return { tab: p.get("tab"), route: p.get("route"), sub: p.get("sub") };
 }
 
-function adminHref(tab: string, route?: string | null): string {
+function adminHref(tab: string, route?: string | null, sub?: string | null): string {
   const p = new URLSearchParams({ tab });
   if (route) p.set("route", route);
+  if (sub) p.set("sub", sub);
   return `/admin?${p.toString()}`;
 }
 
@@ -305,6 +319,8 @@ function crewHref(sub: CrewSub): string {
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
   const { tab: urlTab, sub: urlSub } = useAdminLocation();
+  const chat = useAdminChat();
+  const chatUnread = chat.groupUnread || Object.values<ChatThreadDoc>(chat.threads).some((t) => t.unreadByAdmin === true);
 
   // Old bookmarks: ?tab=registrations / ?tab=shifts / ?tab=group-chat now live elsewhere.
   let tab: DashboardTab = "crew";
@@ -342,10 +358,17 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
             <AdminLink
               key={t.key}
               href={t.href}
-              className={`rounded-full px-1 py-2 text-center text-sm font-semibold ${
+              className={`relative rounded-full px-1 py-2 text-center text-sm font-semibold ${
                 tab === t.key ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
               }`}
             >
+              {t.key === "chat" && chatUnread && (
+                <span
+                  role="img"
+                  aria-label="New messages"
+                  className="absolute left-2 top-1.5 h-2.5 w-2.5 rounded-full bg-green-500"
+                />
+              )}
               {t.label}
             </AdminLink>
           ))}
@@ -375,7 +398,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
         {tab === "crew" && sub === "volunteers" && <CrewSection adminEmail={adminEmail} />}
         {tab === "crew" && sub === "shifts" && <ShiftPlan adminEmail={adminEmail} />}
         {tab === "routes" && <RoutesSection />}
-        {tab === "chat" && <GroupChatSection adminEmail={adminEmail} />}
+        {tab === "chat" && <ChatSection adminEmail={adminEmail} chat={chat} />}
         {tab === "supplies" && <SupplyReportsSection />}
 
         <button type="button" onClick={() => signOut(auth)} className="mt-10 text-sm text-[#5C5850] underline">
@@ -1661,7 +1684,6 @@ function CrewDetail({
         {copied ? "✓ Copied" : "Copy Link"}
       </button>
 
-      <ChatPanel token={v.id} volunteerName={v.name} adminEmail={adminEmail} />
     </>
   );
 }
@@ -1693,6 +1715,21 @@ function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunt
       q,
       (snap) => setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessageDoc)),
       (err) => console.error("[admin] chat messages listener failed:", err)
+    );
+  }, [token]);
+
+  // While this chat is open, anything the volunteer sends counts as read.
+  // Listening to the thread doc (not the messages) avoids racing the
+  // volunteer's own "unreadByAdmin: true" write.
+  useEffect(() => {
+    return onSnapshot(
+      doc(db, "flyerChatThreads", token),
+      (snap) => {
+        if (snap.exists() && snap.data().unreadByAdmin === true) {
+          updateDoc(doc(db, "flyerChatThreads", token), { unreadByAdmin: false }).catch(() => {});
+        }
+      },
+      () => {}
     );
   }, [token]);
 
@@ -1732,7 +1769,7 @@ function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunt
     <div className={`${cardClass} p-4`}>
       <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8A857A]">Chat with {volunteerName}</p>
 
-      <div className="mb-3 max-h-80 space-y-2 overflow-y-auto">
+      <div className="mb-3 max-h-[60vh] space-y-2 overflow-y-auto">
         {messages === null && <p className="text-sm text-[#5C5850]">Loading…</p>}
         {messages?.length === 0 && <p className="text-sm text-[#5C5850]">No messages yet.</p>}
         {messages?.map((m) => (
@@ -1773,9 +1810,216 @@ function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunt
   );
 }
 
+/* ===================== Chat (central inbox) ===================== */
+
+const GROUP_SEEN_KEY = "flyerAdminGroupSeen";
+
+/**
+ * Thread metadata (unread flags, last message) for every volunteer plus the
+ * newest group message. Direct-chat unread state lives on the thread docs;
+ * the group chat has no per-reader state, so "seen" is kept in this browser.
+ */
+function useAdminChat() {
+  const [threads, setThreads] = useState<Record<string, ChatThreadDoc>>({});
+  const [groupLatest, setGroupLatest] = useState<GroupLatest | null>(null);
+  const [groupSeenMs, setGroupSeenMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    return onSnapshot(
+      collection(db, "flyerChatThreads"),
+      (snap) => {
+        const next: Record<string, ChatThreadDoc> = {};
+        snap.docs.forEach((d) => {
+          next[d.id] = { id: d.id, ...(d.data() as Omit<ChatThreadDoc, "id">) };
+        });
+        setThreads(next);
+      },
+      (err) => console.error("[admin] chat threads listener failed:", err)
+    );
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "desc"), limit(1));
+    return onSnapshot(
+      q,
+      (snap) => {
+        const d = snap.docs[0];
+        if (!d) {
+          setGroupLatest(null);
+          return;
+        }
+        const data = d.data() as { senderRole?: ChatSenderRole; senderName?: string; text?: string; createdAt?: Timestamp | null };
+        setGroupLatest({
+          ms: data.createdAt?.toMillis() ?? Date.now(),
+          fromVolunteer: data.senderRole === "volunteer",
+          text: data.text ?? "",
+          senderName: data.senderName ?? "",
+        });
+      },
+      (err) => console.error("[admin] group latest listener failed:", err)
+    );
+  }, []);
+
+  useEffect(() => {
+    setGroupSeenMs(readSeen(GROUP_SEEN_KEY));
+  }, []);
+
+  // First visit on this device: treat existing messages as seen, so the
+  // dot only ever means "something new since you were last here".
+  useEffect(() => {
+    if (groupLatest && groupSeenMs === null) {
+      writeSeen(GROUP_SEEN_KEY, groupLatest.ms);
+      setGroupSeenMs(groupLatest.ms);
+    }
+  }, [groupLatest, groupSeenMs]);
+
+  const markGroupSeen = useCallback((ms: number) => {
+    writeSeen(GROUP_SEEN_KEY, ms);
+    setGroupSeenMs((prev) => (prev !== null && prev >= ms ? prev : ms));
+  }, []);
+
+  const groupUnread = !!groupLatest && groupLatest.fromVolunteer && groupSeenMs !== null && groupLatest.ms > groupSeenMs;
+
+  return { threads, groupLatest, groupUnread, markGroupSeen };
+}
+
+const UNREAD_DOT = "absolute left-2.5 top-2.5 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white";
+
+function ChatSection({ adminEmail, chat }: { adminEmail: string; chat: ReturnType<typeof useAdminChat> }) {
+  const { sub } = useAdminLocation();
+  const [volunteers, setVolunteers] = useState<{ id: string; name: string; status: "active" | "departed" }[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return onSnapshot(
+      collection(db, "flyerVolunteers"),
+      (snap) => {
+        setVolunteers(
+          snap.docs.map((d) => {
+            const data = d.data() as { name?: string; status?: "active" | "departed" };
+            return { id: d.id, name: data.name ?? "(no name)", status: data.status ?? "active" };
+          })
+        );
+        setError(null);
+      },
+      (err) => {
+        console.error("[admin] chat volunteers listener failed:", err);
+        setError(err.code === "permission-denied" ? "Permission denied loading volunteers." : err.message);
+      }
+    );
+  }, []);
+
+  const backLink = (
+    <AdminLink href={adminHref("chat")} className="mb-4 inline-block text-sm text-[#5C5850] underline">
+      ← All chats
+    </AdminLink>
+  );
+
+  if (sub === "group") {
+    return (
+      <>
+        {backLink}
+        <GroupChatSection adminEmail={adminEmail} onSeen={chat.markGroupSeen} />
+      </>
+    );
+  }
+
+  if (sub) {
+    const vol = volunteers?.find((v) => v.id === sub) ?? null;
+    if (!vol) {
+      return (
+        <>
+          {backLink}
+          <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
+            {volunteers === null && !error ? "Loading…" : (error ?? "This volunteer doesn't exist.")}
+          </div>
+        </>
+      );
+    }
+    return (
+      <>
+        {backLink}
+        <ChatPanel token={vol.id} volunteerName={vol.name} adminEmail={adminEmail} />
+      </>
+    );
+  }
+
+  const rows = (volunteers ?? [])
+    .map((v) => ({ v, t: chat.threads[v.id] }))
+    .sort((a, b) => {
+      if ((a.v.status === "active") !== (b.v.status === "active")) return a.v.status === "active" ? -1 : 1;
+      const au = a.t?.unreadByAdmin === true;
+      const bu = b.t?.unreadByAdmin === true;
+      if (au !== bu) return au ? -1 : 1;
+      const at = a.t?.lastMessageAt?.toMillis() ?? 0;
+      const bt = b.t?.lastMessageAt?.toMillis() ?? 0;
+      if (at !== bt) return bt - at;
+      return a.v.name.localeCompare(b.v.name);
+    });
+  const g = chat.groupLatest;
+
+  return (
+    <>
+      {error && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      <AdminLink
+        href={adminHref("chat", null, "group")}
+        className={`${cardClass} relative mb-5 block w-full p-4 pl-8 text-left active:bg-[#FBF9F4]`}
+      >
+        {chat.groupUnread && <span role="img" aria-label="New messages" className={UNREAD_DOT} />}
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-base font-semibold">👥 Group chat</span>
+          <span className="shrink-0 text-xs text-[#8A857A]">All active volunteers</span>
+        </div>
+        <p className="mt-1 truncate text-sm text-[#5C5850]">
+          {g ? `${g.fromVolunteer ? g.senderName : "OXA Team"}: ${g.text}` : "No messages yet"}
+        </p>
+      </AdminLink>
+
+      <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-[#8A857A]">Direct messages</p>
+      {volunteers === null && !error && <p className="text-[#5C5850]">Loading…</p>}
+      {volunteers?.length === 0 && (
+        <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>No volunteers yet.</div>
+      )}
+      <ul className="space-y-3">
+        {rows.map(({ v, t }) => {
+          const unread = t?.unreadByAdmin === true;
+          return (
+            <li key={v.id}>
+              <AdminLink
+                href={adminHref("chat", null, v.id)}
+                className={`${cardClass} relative block w-full p-4 pl-8 text-left active:bg-[#FBF9F4] ${
+                  v.status === "departed" ? "opacity-60" : ""
+                }`}
+              >
+                {unread && <span role="img" aria-label="New messages" className={UNREAD_DOT} />}
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className={`truncate text-base ${unread ? "font-bold" : "font-semibold"}`}>{v.name}</span>
+                  <span className="shrink-0 text-xs text-[#8A857A]">
+                    {v.status === "departed" ? "Departed" : t?.lastMessageAt ? timeAgo(t.lastMessageAt) : ""}
+                  </span>
+                </div>
+                <p className={`mt-1 truncate text-sm ${unread ? "text-[#201E1B]" : "text-[#5C5850]"}`}>
+                  {t?.lastMessage
+                    ? `${t.lastSenderRole === "admin" ? "You: " : ""}${t.lastMessage}`
+                    : "No messages yet"}
+                </p>
+              </AdminLink>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
 /* ===================== Group Chat ===================== */
 
-function GroupChatSection({ adminEmail }: { adminEmail: string }) {
+function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: (ms: number) => void }) {
   const [messages, setMessages] = useState<ChatMessageDoc[] | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -1786,12 +2030,18 @@ function GroupChatSection({ adminEmail }: { adminEmail: string }) {
     const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "asc"));
     return onSnapshot(
       q,
-      (snap) => setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessageDoc)),
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessageDoc);
+        setMessages(rows);
+        const last = rows[rows.length - 1];
+        if (last) onSeen(last.createdAt?.toMillis() ?? Date.now());
+      },
       (err) => {
         console.error("[admin] group chat listener failed:", err);
         setError(err.code === "permission-denied" ? "Permission denied loading the group chat." : err.message);
       }
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function send() {

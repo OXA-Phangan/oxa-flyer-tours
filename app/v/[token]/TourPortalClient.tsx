@@ -7,6 +7,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -18,6 +19,7 @@ import {
 import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { compressImageFile } from "@/lib/image-compression";
+import { readSeen, writeSeen } from "@/lib/chat-seen";
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
 
 /* ===================== Types ===================== */
@@ -161,6 +163,9 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [groupMessages, setGroupMessages] = useState<ChatMessage[] | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
+  const [directUnread, setDirectUnread] = useState(false);
+  const [groupLatest, setGroupLatest] = useState<{ ms: number; mine: boolean } | null>(null);
+  const [groupSeenMs, setGroupSeenMs] = useState<number | null>(null);
 
   const [supplySheetOpen, setSupplySheetOpen] = useState(false);
   const [supplyForm, setSupplyForm] = useState({ item: "", note: "" });
@@ -545,6 +550,61 @@ export default function TourPortalClient({ token }: { token: string }) {
     }
   }, [chatOpen, token]);
 
+  // ---- Unread markers (green dots on the chat buttons) ----
+  const volunteerName = volunteer?.name ?? "";
+  const groupSeenKey = `flyerGroupSeen:${token}`;
+
+  useEffect(() => {
+    if (!volunteerActive) return;
+    return onSnapshot(
+      doc(db, "flyerChatThreads", token),
+      (snap) => setDirectUnread(snap.exists() && snap.data().unreadByVolunteer === true),
+      () => {}
+    );
+  }, [token, volunteerActive]);
+
+  // New admin replies while the direct chat is open count as read.
+  useEffect(() => {
+    if (chatOpen === "direct" && directUnread) {
+      updateDoc(doc(db, "flyerChatThreads", token), { unreadByVolunteer: false }).catch(() => {});
+    }
+  }, [chatOpen, directUnread, token]);
+
+  useEffect(() => {
+    if (!volunteerActive) return;
+    const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "desc"), limit(1));
+    return onSnapshot(
+      q,
+      (snap) => {
+        const d = snap.docs[0];
+        if (!d) {
+          setGroupLatest(null);
+          return;
+        }
+        const data = d.data() as { senderRole?: string; senderName?: string; createdAt?: Timestamp | null };
+        setGroupLatest({
+          ms: data.createdAt?.toMillis() ?? Date.now(),
+          mine: data.senderRole === "volunteer" && data.senderName === volunteerName,
+        });
+      },
+      () => {}
+    );
+  }, [token, volunteerActive, volunteerName]);
+
+  useEffect(() => {
+    setGroupSeenMs(readSeen(groupSeenKey));
+  }, [groupSeenKey]);
+
+  // First visit on this device (or the group chat is open): everything so far counts as seen.
+  useEffect(() => {
+    if (groupLatest && (groupSeenMs === null || chatOpen === "group")) {
+      writeSeen(groupSeenKey, groupLatest.ms);
+      setGroupSeenMs(groupLatest.ms);
+    }
+  }, [groupLatest, groupSeenMs, chatOpen, groupSeenKey]);
+
+  const groupUnread = !!groupLatest && !groupLatest.mine && groupSeenMs !== null && groupLatest.ms > groupSeenMs;
+
   async function sendChatMessage() {
     const trimmed = chatInput.trim();
     if (!trimmed || !volunteer) return;
@@ -768,15 +828,29 @@ export default function TourPortalClient({ token }: { token: string }) {
           <button
             type="button"
             onClick={() => setChatOpen("direct")}
-            className={`${cardClass} flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
           >
+            {directUnread && (
+              <span
+                role="img"
+                aria-label="New message"
+                className="absolute left-2 top-2 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"
+              />
+            )}
             💬 Message OXA
           </button>
           <button
             type="button"
             onClick={() => setChatOpen("group")}
-            className={`${cardClass} flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
           >
+            {groupUnread && (
+              <span
+                role="img"
+                aria-label="New messages"
+                className="absolute left-2 top-2 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"
+              />
+            )}
             👥 Group Chat
           </button>
         </div>
