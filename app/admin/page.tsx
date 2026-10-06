@@ -21,6 +21,7 @@ import { getDownloadURL, ref } from "firebase/storage";
 import { auth, db, googleProvider, storage } from "@/lib/firebase";
 import { FLYER_MANAGEMENT_EMAILS } from "@/lib/constants";
 import { generateToken } from "@/lib/token";
+import ShiftPlan from "./ShiftPlan";
 
 type Registration = {
   id: string;
@@ -113,10 +114,10 @@ const primaryButton =
 const secondaryButton =
   "w-full rounded-2xl border border-[#E2DFD6] bg-white px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 
-function Shell({ children }: { children: ReactNode }) {
+function Shell({ children, wide }: { children: ReactNode; wide?: boolean }) {
   return (
     <main className="flex min-h-screen flex-1 justify-center bg-[#EFEDE7] px-4 py-8 text-[#201E1B]">
-      <div className="w-full max-w-md">{children}</div>
+      <div className={`w-full ${wide ? "max-w-6xl" : "max-w-md"}`}>{children}</div>
     </main>
   );
 }
@@ -287,7 +288,7 @@ function AdminLink({ href, className, children }: { href: string; className?: st
   );
 }
 
-const DASHBOARD_TABS = ["registrations", "routes", "crew", "group-chat", "supplies"] as const;
+const DASHBOARD_TABS = ["registrations", "routes", "crew", "shifts", "group-chat", "supplies"] as const;
 type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
@@ -300,12 +301,13 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
     { key: "registrations", label: "Registrations" },
     { key: "routes", label: "Routes" },
     { key: "crew", label: "Crew" },
+    { key: "shifts", label: "Shifts" },
     { key: "group-chat", label: "Group Chat" },
     { key: "supplies", label: "Supplies" },
   ];
 
   return (
-    <Shell>
+    <Shell wide={tab === "shifts"}>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div className="flex gap-2 rounded-full bg-[#E2DFD6] p-1">
           {tabs.map((t) => (
@@ -328,6 +330,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
       {tab === "registrations" && <RegistrationsSection adminEmail={adminEmail} />}
       {tab === "routes" && <RoutesSection />}
       {tab === "crew" && <CrewSection adminEmail={adminEmail} />}
+      {tab === "shifts" && <ShiftPlan adminEmail={adminEmail} />}
       {tab === "group-chat" && <GroupChatSection adminEmail={adminEmail} />}
       {tab === "supplies" && <SupplyReportsSection />}
     </Shell>

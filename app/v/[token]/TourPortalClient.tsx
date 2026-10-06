@@ -18,6 +18,7 @@ import {
 import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { compressImageFile } from "@/lib/image-compression";
+import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
 
 /* ===================== Types ===================== */
 
@@ -72,7 +73,7 @@ type TourState = {
   skipReasons: Record<number, string>;
 };
 
-type Screen = "loading" | "invalid" | "picker" | "tour" | "completion";
+type Screen = "loading" | "invalid" | "picker" | "shifts" | "tour" | "completion";
 
 const SKIP_REASONS = ["I don't have enough time", "The spot is closed", "Other reason"];
 
@@ -135,6 +136,7 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [volunteer, setVolunteer] = useState<Volunteer | null>(null);
   const [routes, setRoutes] = useState<FlyerRoute[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [shifts, setShifts] = useState<FlyerShift[] | null>(null);
 
   const [activeRoute, setActiveRoute] = useState<FlyerRoute | null>(null);
   const [tour, setTour] = useState<TourState>({ currentIndex: 0, statusMap: {}, skipReasons: {} });
@@ -201,6 +203,26 @@ export default function TourPortalClient({ token }: { token: string }) {
       cancelled = true;
     };
   }, [token]);
+
+  // ---- My shifts (planned by the admin; read-only here) ----
+  const volunteerActive = volunteer?.status === "active";
+  useEffect(() => {
+    if (!volunteerActive) return;
+    return onSnapshot(
+      collection(db, "flyerVolunteers", token, "shifts"),
+      (snap) => setShifts(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as FlyerShift)),
+      (err) => {
+        console.error("[tour] shifts listener failed:", err);
+        setShifts([]);
+      }
+    );
+  }, [token, volunteerActive]);
+
+  const todayStr = bangkokToday();
+  const upcomingShifts = useMemo(
+    () => (shifts ?? []).filter((s) => s.date >= todayStr).sort(compareShifts),
+    [shifts, todayStr]
+  );
 
   const regions = useMemo(() => {
     const map = new Map<string, FlyerRoute[]>();
@@ -623,6 +645,71 @@ export default function TourPortalClient({ token }: { token: string }) {
     );
   }
 
+  if (screen === "shifts") {
+    const todays = upcomingShifts.filter((s) => s.date === todayStr);
+    const later = upcomingShifts.filter((s) => s.date > todayStr);
+    return (
+      <Shell>
+        <button type="button" onClick={() => setScreen("picker")} className="mb-4 text-sm font-semibold underline">
+          ← Back
+        </button>
+        <h1 className="mb-6 text-2xl font-semibold">My shifts</h1>
+
+        {shifts === null && <p className="text-[#5C5850]">Loading…</p>}
+        {shifts !== null && upcomingShifts.length === 0 && (
+          <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
+            No shifts planned yet. OXA will add them here.
+          </div>
+        )}
+
+        {todays.length > 0 && (
+          <div className="mb-6 space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Today · {dayLabel(todayStr)}</p>
+            {todays.map((s) => {
+              const label = tourLabel(s);
+              const route = s.tourId ? routes?.find((r) => r.id === s.tourId) ?? null : null;
+              return (
+                <div key={s.id} className="rounded-2xl border border-[#E2C27A] bg-[#FFF3D6] p-4">
+                  <p className="text-2xl font-semibold">
+                    {s.startTime}–{s.endTime}
+                  </p>
+                  <p className="mt-1 text-base font-medium">{label ?? "No tour planned"}</p>
+                  {s.note && <p className="mt-2 text-sm text-[#44403A]">{s.note}</p>}
+                  {route && (
+                    <button type="button" onClick={() => selectRoute(route)} className={`${primaryButton} mt-3`}>
+                      Open tour
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {later.length > 0 && (
+          <div className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Upcoming</p>
+            {later.map((s) => {
+              const label = tourLabel(s);
+              return (
+                <div key={s.id} className={`${cardClass} p-4`}>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="font-semibold">{dayLabel(s.date)}</span>
+                    <span className="text-sm font-semibold">
+                      {s.startTime}–{s.endTime}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-[#5C5850]">{label ?? "Tour to be announced"}</p>
+                  {s.note && <p className="mt-2 text-sm text-[#44403A]">{s.note}</p>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Shell>
+    );
+  }
+
   if (screen === "picker" || regionSheetKey) {
     return (
       <Shell>
@@ -659,6 +746,23 @@ export default function TourPortalClient({ token }: { token: string }) {
             )}
           </div>
         )}
+
+        <button
+          type="button"
+          onClick={() => setScreen("shifts")}
+          className={`${cardClass} mb-6 block w-full p-4 text-left active:bg-[#FBF9F4]`}
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">📅 My shifts</p>
+          <p className="mt-1 font-semibold">
+            {shifts === null
+              ? "Loading…"
+              : upcomingShifts.length === 0
+                ? "No shifts planned yet"
+                : `${upcomingShifts[0].date === todayStr ? "Today" : dayLabel(upcomingShifts[0].date)} · ${upcomingShifts[0].startTime}–${upcomingShifts[0].endTime}${
+                    tourLabel(upcomingShifts[0]) ? ` · ${tourLabel(upcomingShifts[0])}` : ""
+                  }`}
+          </p>
+        </button>
 
         <div className="mb-6 flex gap-3">
           <button
