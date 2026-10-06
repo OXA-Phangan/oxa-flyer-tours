@@ -26,11 +26,16 @@ export default function RegisterPage() {
   const [passportPhotoPath, setPassportPhotoPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  const [selfieState, setSelfieState] = useState<UploadState>("idle");
+  const [selfiePhotoPath, setSelfiePhotoPath] = useState<string | null>(null);
+  const [selfiePreviewUrl, setSelfiePreviewUrl] = useState<string | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submittedName, setSubmittedName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selfieInputRef = useRef<HTMLInputElement>(null);
   // One token per form session — retaking the photo overwrites the same
   // path instead of leaving orphaned uploads behind.
   const tokenRef = useRef<string | null>(null);
@@ -41,6 +46,12 @@ export default function RegisterPage() {
     };
   }, [previewUrl]);
 
+  useEffect(() => {
+    return () => {
+      if (selfiePreviewUrl) URL.revokeObjectURL(selfiePreviewUrl);
+    };
+  }, [selfiePreviewUrl]);
+
   const datesInvalid = checkInDate !== "" && checkOutDate !== "" && checkOutDate < checkInDate;
 
   const canSubmit =
@@ -50,6 +61,8 @@ export default function RegisterPage() {
     !datesInvalid &&
     uploadState === "done" &&
     passportPhotoPath !== null &&
+    selfieState === "done" &&
+    selfiePhotoPath !== null &&
     termsAccepted &&
     !submitting;
 
@@ -80,9 +93,35 @@ export default function RegisterPage() {
     }
   }
 
+  async function handleSelfieChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setError(null);
+    setSelfieState("uploading");
+    setSelfiePhotoPath(null);
+
+    try {
+      const compressed = await compressImageFile(file);
+      tokenRef.current ??= generateToken();
+      const path = `flyerPassports/${tokenRef.current}/selfie.jpg`;
+      await uploadBytes(ref(storage, path), compressed, {
+        contentType: compressed.type || "image/jpeg",
+      });
+      setSelfiePreviewUrl(URL.createObjectURL(compressed));
+      setSelfiePhotoPath(path);
+      setSelfieState("done");
+    } catch (err) {
+      console.error("[register] selfie upload failed:", err);
+      setSelfieState("error");
+      setError("Selfie upload failed. Please check your connection and try again.");
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!canSubmit || !passportPhotoPath) return;
+    if (!canSubmit || !passportPhotoPath || !selfiePhotoPath) return;
 
     setSubmitting(true);
     setError(null);
@@ -96,6 +135,7 @@ export default function RegisterPage() {
         checkOutDate,
         checkOutTime: checkOutTime || null,
         passportPhotoPath,
+        selfiePhotoPath,
         termsAcceptedAt: serverTimestamp(),
         // The deposit notice sits directly above the terms checkbox, so
         // accepting the terms also acknowledges the deposit.
@@ -245,6 +285,45 @@ export default function RegisterPage() {
                 className="w-full rounded-xl border border-dashed border-[#D6D1C3] bg-[#FBF9F4] px-4 py-4 text-base font-medium disabled:opacity-60"
               >
                 {uploadState === "uploading" ? "Uploading…" : "📷 Take / choose passport photo"}
+              </button>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-[#E2DFD6] bg-white p-4">
+            <span className={labelClass}>Selfie</span>
+            <input
+              ref={selfieInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              onChange={handleSelfieChange}
+              className="hidden"
+            />
+            {selfieState === "done" ? (
+              <div className="rounded-xl border border-green-600 bg-green-50 p-3 text-green-800">
+                <div className="flex items-center gap-3">
+                  {selfiePreviewUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={selfiePreviewUrl} alt="Selfie preview" className="h-14 w-14 rounded-lg object-cover" />
+                  )}
+                  <div className="flex-1 font-medium">✓ Selfie Uploaded</div>
+                  <button
+                    type="button"
+                    onClick={() => selfieInputRef.current?.click()}
+                    className="rounded-lg px-2 py-1 text-sm underline"
+                  >
+                    Retake
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={selfieState === "uploading"}
+                onClick={() => selfieInputRef.current?.click()}
+                className="w-full rounded-xl border border-dashed border-[#D6D1C3] bg-[#FBF9F4] px-4 py-4 text-base font-medium disabled:opacity-60"
+              >
+                {selfieState === "uploading" ? "Uploading…" : "🤳 Take a selfie"}
               </button>
             )}
           </div>

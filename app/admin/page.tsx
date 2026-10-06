@@ -7,6 +7,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -17,11 +18,12 @@ import {
   where,
   writeBatch,
 } from "firebase/firestore";
-import { getDownloadURL, ref } from "firebase/storage";
+import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { auth, db, googleProvider, storage } from "@/lib/firebase";
 import { FLYER_MANAGEMENT_EMAILS } from "@/lib/constants";
 import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
+import { bangkokToday } from "@/lib/shifts";
 
 type Registration = {
   id: string;
@@ -32,6 +34,8 @@ type Registration = {
   checkOutTime: string | null;
   // null once the retention job (Cloud Function cleanupExpiredFlyerPassports) has deleted the photo.
   passportPhotoPath: string | null;
+  // Selfie taken at registration; absent on registrations from before it existed.
+  selfiePhotoPath?: string | null;
   depositAcknowledged: boolean;
   submittedAt: Timestamp | null;
 };
@@ -74,6 +78,8 @@ type FlyerVolunteerDoc = {
   onBreak: boolean;
   hasPendingStayEdit: boolean;
   pendingStayEdit: PendingStayEdit | null;
+  passportPhotoPath?: string | null;
+  selfiePhotoPath?: string | null;
 };
 
 type ChatSenderRole = "volunteer" | "admin";
@@ -516,6 +522,83 @@ function RegistrationsSection({ adminEmail }: { adminEmail: string }) {
   );
 }
 
+/** A photo from Storage with a "Download JPG" button (falls back to opening it in a new tab). */
+function StoragePhoto({
+  path,
+  label,
+  fileName,
+}: {
+  path: string | null | undefined;
+  label: string;
+  fileName: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setUrl(null);
+    setFailed(false);
+    if (!path) return;
+    getDownloadURL(ref(storage, path))
+      .then((u) => !cancelled && setUrl(u))
+      .catch((err) => {
+        console.error("[admin] photo load failed:", err);
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  async function download() {
+    if (!path || !url) return;
+    setDownloading(true);
+    try {
+      const blob = await getBlob(ref(storage, path));
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+    } catch (err) {
+      console.error("[admin] photo download failed, opening in a new tab instead:", err);
+      window.open(url, "_blank", "noopener");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className={`${cardClass} mb-5 overflow-hidden`}>
+      <p className="px-4 pt-3 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{label}</p>
+      {url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={url} alt={label} className="mt-2 block w-full" />
+      ) : (
+        <div className="mt-2 flex h-40 items-center justify-center bg-[#FBF9F4] px-4 text-center text-sm text-[#8A857A]">
+          {!path
+            ? "No photo on file (it may have been deleted after the retention period)."
+            : failed
+              ? "Photo could not be loaded."
+              : "Loading photo…"}
+        </div>
+      )}
+      {url && (
+        <div className="p-3">
+          <button type="button" onClick={download} disabled={downloading} className={secondaryButton}>
+            {downloading ? "Preparing…" : "Download JPG"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RegistrationDetail({
   registration: r,
   adminEmail,
@@ -527,28 +610,9 @@ function RegistrationDetail({
   onBack: () => void;
   onApproved: (url: string) => void;
 }) {
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
-  const [photoError, setPhotoError] = useState(false);
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [confirmReject, setConfirmReject] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!r.passportPhotoPath) {
-      setPhotoError(true);
-      return;
-    }
-    getDownloadURL(ref(storage, r.passportPhotoPath))
-      .then((url) => !cancelled && setPhotoUrl(url))
-      .catch((err) => {
-        console.error("[admin] passport photo load failed:", err);
-        if (!cancelled) setPhotoError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [r.passportPhotoPath]);
 
   async function approve() {
     setBusy("approve");
@@ -565,6 +629,7 @@ function RegistrationDetail({
         checkOutDate: r.checkOutDate,
         checkOutTime: r.checkOutTime ?? null,
         passportPhotoPath: r.passportPhotoPath,
+        selfiePhotoPath: r.selfiePhotoPath ?? null,
         passportDeleteAfter: passportDeleteAfter(r.checkOutDate),
         status: "active",
         hasPendingStayEdit: false,
@@ -627,16 +692,10 @@ function RegistrationDetail({
         ← Back to list
       </button>
 
-      <div className={`${cardClass} mb-5 overflow-hidden`}>
-        {photoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={photoUrl} alt={`Passport of ${r.name}`} className="block w-full" />
-        ) : (
-          <div className="flex h-48 items-center justify-center bg-[#FBF9F4] text-sm text-[#8A857A]">
-            {photoError ? "Passport photo could not be loaded." : "Loading photo…"}
-          </div>
-        )}
-      </div>
+      <StoragePhoto path={r.passportPhotoPath} label="Passport" fileName={`passport-${r.name}.jpg`} />
+      {r.selfiePhotoPath && (
+        <StoragePhoto path={r.selfiePhotoPath} label="Selfie" fileName={`selfie-${r.name}.jpg`} />
+      )}
 
       <div className={`${cardClass} mb-5 divide-y divide-[#E2DFD6]`}>
         <Row label="Name" value={r.name} />
@@ -1294,9 +1353,17 @@ function CrewDetail({
   adminEmail: string;
   onBack: () => void;
 }) {
-  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "stay" | "end" | "reactivate" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [stayOpen, setStayOpen] = useState(false);
+  const [stayForm, setStayForm] = useState({
+    checkInDate: v.checkInDate,
+    checkInTime: v.checkInTime ?? "",
+    checkOutDate: v.checkOutDate,
+    checkOutTime: v.checkOutTime ?? "",
+  });
+  const [confirmEnd, setConfirmEnd] = useState(false);
 
   const link = typeof window !== "undefined" ? `${window.location.origin}/v/${v.id}` : "";
 
@@ -1313,6 +1380,103 @@ function CrewDetail({
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  function openStayEditor() {
+    setStayForm({
+      checkInDate: v.checkInDate,
+      checkInTime: v.checkInTime ?? "",
+      checkOutDate: v.checkOutDate,
+      checkOutTime: v.checkOutTime ?? "",
+    });
+    setError(null);
+    setStayOpen(true);
+  }
+
+  async function saveStay() {
+    if (!stayForm.checkInDate || !stayForm.checkOutDate) {
+      setError("Please set both dates.");
+      return;
+    }
+    if (stayForm.checkOutDate < stayForm.checkInDate) {
+      setError("Check-out can't be before check-in.");
+      return;
+    }
+    setBusy("stay");
+    setError(null);
+    try {
+      await updateDoc(doc(db, "flyerVolunteers", v.id), {
+        checkInDate: stayForm.checkInDate,
+        checkInTime: stayForm.checkInTime || null,
+        checkOutDate: stayForm.checkOutDate,
+        checkOutTime: stayForm.checkOutTime || null,
+        passportDeleteAfter: passportDeleteAfter(stayForm.checkOutDate),
+        updatedAt: serverTimestamp(),
+      });
+      setStayOpen(false);
+    } catch (err) {
+      console.error("[admin] saving stay failed:", err);
+      setError("Saving failed. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Volunteer leaves early: check-out becomes today (if it was later), the
+  // personal link stops working, future shifts are removed, and the 7-day
+  // passport-retention clock restarts from the new check-out date.
+  async function endStayNow() {
+    setBusy("end");
+    setError(null);
+    try {
+      const today = bangkokToday();
+      const newCheckOut = v.checkOutDate > today ? today : v.checkOutDate;
+      const futureShifts = await getDocs(
+        query(collection(db, "flyerVolunteers", v.id, "shifts"), where("date", ">", today))
+      );
+      const batch = writeBatch(db);
+      batch.update(doc(db, "flyerVolunteers", v.id), {
+        status: "departed",
+        checkOutDate: newCheckOut,
+        passportDeleteAfter: passportDeleteAfter(newCheckOut),
+        pendingStayEdit: null,
+        hasPendingStayEdit: false,
+        onBreak: false,
+        endedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      futureShifts.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      setConfirmEnd(false);
+      setStayOpen(false);
+    } catch (err) {
+      console.error("[admin] ending stay failed:", err);
+      setError("Ending the stay failed. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reactivate() {
+    if (v.checkOutDate < bangkokToday()) {
+      setError("The check-out date is in the past. Edit the stay first, then reactivate.");
+      return;
+    }
+    setBusy("reactivate");
+    setError(null);
+    try {
+      await updateDoc(doc(db, "flyerVolunteers", v.id), {
+        status: "active",
+        endedAt: null,
+        passportDeleteAfter: passportDeleteAfter(v.checkOutDate),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("[admin] reactivating failed:", err);
+      setError("Reactivating failed. Please try again.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function approveStayEdit() {
@@ -1367,6 +1531,95 @@ function CrewDetail({
         <Row label="Check-in" value={formatDateTime(v.checkInDate, v.checkInTime)} />
         <Row label="Check-out" value={formatDateTime(v.checkOutDate, v.checkOutTime)} />
         <Row label="On break" value={v.onBreak ? "✓ Yes" : "✗ No"} />
+      </div>
+
+      <StoragePhoto path={v.passportPhotoPath} label="Passport" fileName={`passport-${v.name}.jpg`} />
+      {v.selfiePhotoPath && (
+        <StoragePhoto path={v.selfiePhotoPath} label="Selfie" fileName={`selfie-${v.name}.jpg`} />
+      )}
+
+      <div className={`${cardClass} mb-5 p-4`}>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Stay</p>
+
+        {stayOpen ? (
+          <div className="space-y-3">
+            {(
+              [
+                ["checkInDate", "Check-in date", "date"],
+                ["checkInTime", "Check-in time (optional)", "time"],
+                ["checkOutDate", "Check-out date", "date"],
+                ["checkOutTime", "Check-out time (optional)", "time"],
+              ] as const
+            ).map(([key, label, type]) => (
+              <div key={key}>
+                <label htmlFor={`stay-${key}`} className="mb-1.5 block text-sm font-medium">
+                  {label}
+                </label>
+                <input
+                  id={`stay-${key}`}
+                  type={type}
+                  value={stayForm[key]}
+                  onChange={(e) => setStayForm((f) => ({ ...f, [key]: e.target.value }))}
+                  className="block w-full min-w-0 appearance-none rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base min-h-[50px] focus:border-[#201E1B] focus:outline-none"
+                />
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setStayOpen(false)} disabled={busy !== null} className={secondaryButton}>
+                Cancel
+              </button>
+              <button type="button" onClick={saveStay} disabled={busy !== null} className={primaryButton}>
+                {busy === "stay" ? "Saving…" : "Save stay"}
+              </button>
+            </div>
+            <p className="text-xs text-[#8A857A]">
+              The passport photo is deleted 7 days after the check-out date.
+            </p>
+          </div>
+        ) : confirmEnd ? (
+          <div className="rounded-xl border border-red-300 bg-red-50 p-3">
+            <p className="mb-3 text-sm text-red-900">
+              End {v.name}&apos;s stay now? Their link stops working and shifts after today are removed. You can
+              reactivate later.
+            </p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setConfirmEnd(false)} disabled={busy !== null} className={secondaryButton}>
+                Keep
+              </button>
+              <button
+                type="button"
+                onClick={endStayNow}
+                disabled={busy !== null}
+                className="w-full rounded-2xl bg-red-700 px-4 py-4 text-base font-semibold text-white disabled:opacity-40"
+              >
+                {busy === "end" ? "Ending…" : "End stay"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <button type="button" onClick={openStayEditor} disabled={busy !== null} className={secondaryButton}>
+              Edit stay dates
+            </button>
+            {v.status === "active" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setConfirmEnd(true);
+                }}
+                disabled={busy !== null}
+                className="w-full rounded-2xl border border-red-300 bg-white px-4 py-4 text-base font-semibold text-red-800 disabled:opacity-40"
+              >
+                End stay now (left early)
+              </button>
+            ) : (
+              <button type="button" onClick={reactivate} disabled={busy !== null} className={primaryButton}>
+                {busy === "reactivate" ? "Reactivating…" : "Reactivate volunteer"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {v.hasPendingStayEdit && v.pendingStayEdit && (

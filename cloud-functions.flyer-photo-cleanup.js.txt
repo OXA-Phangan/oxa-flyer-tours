@@ -8,7 +8,8 @@
 // bypass storage.rules / firestore.rules. Every deletion is logged
 // (functions:log) so the first runs can be checked.
 //
-//  - Passport photos: deleted FLYER_PASSPORT_GRACE_DAYS (7) after the
+//  - Passport photos AND selfies (same lifetime, both stored under
+//    flyerPassports/): deleted FLYER_PASSPORT_GRACE_DAYS (7) after the
 //    volunteer's check-out date. For approved volunteers the deadline lives
 //    on flyerVolunteers/{token}.passportDeleteAfter (admin recomputes it when
 //    a stay change is approved). Registrations that were never approved
@@ -55,8 +56,10 @@ exports.cleanupExpiredFlyerPassports = onSchedule(
       .get();
     for (const doc of volunteers.docs) {
       await flyerDeleteFile(bucket, doc.get("passportPhotoPath"));
+      await flyerDeleteFile(bucket, doc.get("selfiePhotoPath"));
       await doc.ref.update({
         passportPhotoPath: null,
+        selfiePhotoPath: null,
         passportDeleteAfter: null,
         passportDeletedAt: FieldValue.serverTimestamp(),
       });
@@ -73,14 +76,21 @@ exports.cleanupExpiredFlyerPassports = onSchedule(
       if (checkOutMs === null) continue;
       if (checkOutMs + FLYER_PASSPORT_GRACE_DAYS * 24 * FLYER_HOUR_MS > now) continue;
       await flyerDeleteFile(bucket, data.passportPhotoPath);
-      await doc.ref.update({ passportPhotoPath: null, passportDeletedAt: FieldValue.serverTimestamp() });
+      await flyerDeleteFile(bucket, data.selfiePhotoPath);
+      await doc.ref.update({
+        passportPhotoPath: null,
+        selfiePhotoPath: null,
+        passportDeletedAt: FieldValue.serverTimestamp(),
+      });
     }
 
     // 3. Orphans — referenced by nothing (computed AFTER 1 and 2 cleared their refs).
     const referenced = new Set();
     for (const col of ["flyerRegistrations", "flyerVolunteers"]) {
-      const snap = await db.collection(col).where("passportPhotoPath", "!=", null).get();
-      snap.docs.forEach((d) => referenced.add(d.get("passportPhotoPath")));
+      for (const field of ["passportPhotoPath", "selfiePhotoPath"]) {
+        const snap = await db.collection(col).where(field, "!=", null).get();
+        snap.docs.forEach((d) => referenced.add(d.get(field)));
+      }
     }
     const orphanCutoffMs = now - FLYER_ORPHAN_GRACE_HOURS * FLYER_HOUR_MS;
     const [files] = await bucket.getFiles({ prefix: "flyerPassports/" });
