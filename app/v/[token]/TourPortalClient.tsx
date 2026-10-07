@@ -42,6 +42,7 @@ type FlyerRoute = {
   region: string;
   name: string;
   spots: Spot[];
+  completionMessage: string | null;
 };
 
 type PendingStayEdit = {
@@ -200,8 +201,14 @@ export default function TourPortalClient({ token }: { token: string }) {
         const routesSnap = await getDocs(collection(db, "flyerRoutes"));
         if (cancelled) return;
         const loadedRoutes: FlyerRoute[] = routesSnap.docs.map((d) => {
-          const data = d.data() as { region: string; name: string; spots: Spot[] };
-          return { id: d.id, region: data.region, name: data.name, spots: data.spots ?? [] };
+          const data = d.data() as { region: string; name: string; spots: Spot[]; completionMessage?: string | null };
+          return {
+            id: d.id,
+            region: data.region,
+            name: data.name,
+            spots: data.spots ?? [],
+            completionMessage: data.completionMessage ?? null,
+          };
         });
         setRoutes(loadedRoutes);
         setScreen(v.status === "active" ? "picker" : "invalid");
@@ -1233,7 +1240,9 @@ export default function TourPortalClient({ token }: { token: string }) {
             <div className="mb-6 inline-block rounded-full bg-[#F3E4C2] px-4 py-2 text-sm font-semibold text-[#96742A]">
               Skipped: {skipped}/{total}
             </div>
-            <p className="mb-6 text-base text-[#5C5850]">Thank you for flyering today 🙌</p>
+            <p className="mb-6 whitespace-pre-line text-base text-[#5C5850]">
+              {activeRoute.completionMessage?.trim() || "Thank you for flyering today 🙌"}
+            </p>
             <button type="button" onClick={backToPicker} className={primaryButton}>
               Back
             </button>

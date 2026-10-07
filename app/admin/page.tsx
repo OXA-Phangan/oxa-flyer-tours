@@ -62,6 +62,8 @@ type FlyerRouteDoc = {
   region: string;
   name: string;
   spots: RouteSpot[];
+  /** Shown on the "Tour Completed!" screen; empty = default thank-you text. */
+  completionMessage?: string | null;
   duplicatedFrom?: string | null;
 };
 
@@ -945,6 +947,7 @@ function RouteEditor({
 }) {
   const [region, setRegion] = useState(route?.region ?? "");
   const [name, setName] = useState(route?.name ?? "");
+  const [completionMessage, setCompletionMessage] = useState(route?.completionMessage ?? "");
   // Each spot gets a stable client-side key (_k) so a moved card keeps its
   // identity (and we can scroll to it). Stripped again in cleanedSpots().
   const keyCounter = useRef(0);
@@ -1030,6 +1033,7 @@ function RouteEditor({
           region: region.trim(),
           name: name.trim(),
           spots: cleanedSpots(),
+          completionMessage: completionMessage.trim() || null,
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -1037,6 +1041,7 @@ function RouteEditor({
           region: region.trim(),
           name: name.trim(),
           spots: cleanedSpots(),
+          completionMessage: completionMessage.trim() || null,
           duplicatedFrom: null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1063,6 +1068,7 @@ function RouteEditor({
         region: region.trim(),
         name: `${name.trim()} (Copy)`,
         spots: cleanedSpots(),
+        completionMessage: completionMessage.trim() || null,
         duplicatedFrom: route?.id ?? null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1251,6 +1257,24 @@ function RouteEditor({
         >
           + Add Spot
         </button>
+      </div>
+
+      <div className={`${cardClass} mb-5 p-4`}>
+        <label htmlFor="route-completion" className="mb-1 block text-sm font-medium">
+          Message when the tour is completed
+        </label>
+        <p className="mb-2 text-xs text-[#8A857A]">
+          Shown to the volunteer under &quot;Tour Completed!&quot;. Line breaks are kept. Leave empty for the default text
+          (&quot;Thank you for flyering today 🙌&quot;).
+        </p>
+        <textarea
+          id="route-completion"
+          value={completionMessage}
+          onChange={(e) => setCompletionMessage(e.target.value)}
+          placeholder="Thank you for flyering today 🙌"
+          rows={3}
+          className={spotTextInput}
+        />
       </div>
 
       {error && (
