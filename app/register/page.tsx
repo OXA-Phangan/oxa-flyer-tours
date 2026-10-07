@@ -13,12 +13,17 @@ const inputClass =
   "block w-full min-w-0 appearance-none rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base text-[#201E1B] min-h-[50px] focus:border-[#201E1B] focus:outline-none";
 const labelClass = "mb-1.5 block text-sm font-medium text-[#201E1B]";
 
+// Standard hostel times; volunteers may change them via "Edit".
+const DEFAULT_CHECK_IN_TIME = "14:00";
+const DEFAULT_CHECK_OUT_TIME = "10:00";
+
 export default function RegisterPage() {
   const [name, setName] = useState("");
   const [checkInDate, setCheckInDate] = useState("");
-  const [checkInTime, setCheckInTime] = useState("");
+  const [checkInTime, setCheckInTime] = useState(DEFAULT_CHECK_IN_TIME);
   const [checkOutDate, setCheckOutDate] = useState("");
-  const [checkOutTime, setCheckOutTime] = useState("");
+  const [checkOutTime, setCheckOutTime] = useState(DEFAULT_CHECK_OUT_TIME);
+  const [editTimes, setEditTimes] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
 
@@ -35,6 +40,7 @@ export default function RegisterPage() {
   const [submittedName, setSubmittedName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const selfieInputRef = useRef<HTMLInputElement>(null);
   // One token per form session — retaking the photo overwrites the same
   // path instead of leaving orphaned uploads behind.
@@ -208,18 +214,6 @@ export default function RegisterPage() {
               />
             </div>
             <div>
-              <label htmlFor="checkInTime" className={labelClass}>
-                Check-in time <span className="font-normal text-[#8A857A]">(optional)</span>
-              </label>
-              <input
-                id="checkInTime"
-                type="time"
-                value={checkInTime}
-                onChange={(e) => setCheckInTime(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-            <div>
               <label htmlFor="checkOutDate" className={labelClass}>
                 Check-out date
               </label>
@@ -236,18 +230,64 @@ export default function RegisterPage() {
                 <p className="mt-1.5 text-sm text-red-700">Check-out can&apos;t be before check-in.</p>
               )}
             </div>
-            <div>
-              <label htmlFor="checkOutTime" className={labelClass}>
-                Check-out time <span className="font-normal text-[#8A857A]">(optional)</span>
-              </label>
-              <input
-                id="checkOutTime"
-                type="time"
-                value={checkOutTime}
-                onChange={(e) => setCheckOutTime(e.target.value)}
-                className={inputClass}
-              />
-            </div>
+            {editTimes ? (
+              <div className="space-y-4 rounded-xl border border-[#E2DFD6] bg-[#FBF9F4] p-3">
+                <div>
+                  <label htmlFor="checkInTime" className={labelClass}>
+                    Check-in time
+                  </label>
+                  <input
+                    id="checkInTime"
+                    type="time"
+                    value={checkInTime}
+                    onChange={(e) => setCheckInTime(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="checkOutTime" className={labelClass}>
+                    Check-out time
+                  </label>
+                  <input
+                    id="checkOutTime"
+                    type="time"
+                    value={checkOutTime}
+                    onChange={(e) => setCheckOutTime(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCheckInTime(DEFAULT_CHECK_IN_TIME);
+                    setCheckOutTime(DEFAULT_CHECK_OUT_TIME);
+                    setEditTimes(false);
+                  }}
+                  className="text-sm underline"
+                >
+                  Reset to standard times
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between gap-3 rounded-xl border border-[#E2DFD6] bg-[#FBF9F4] p-3">
+                <div className="text-sm">
+                  <div className="font-medium">
+                    Check-in {checkInTime || "—"} · Check-out {checkOutTime || "—"}
+                  </div>
+                  <div className="mt-0.5 text-[#8A857A]">
+                    Standard times: check-in {DEFAULT_CHECK_IN_TIME}, check-out {DEFAULT_CHECK_OUT_TIME}. Only change them if you
+                    arrive or leave at a different time.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditTimes(true)}
+                  className="shrink-0 rounded-lg border border-[#D6D1C3] bg-white px-3 py-1.5 text-sm font-medium"
+                >
+                  Edit
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="rounded-2xl border border-[#E2DFD6] bg-white p-4">
@@ -260,6 +300,14 @@ export default function RegisterPage() {
               onChange={handleFileChange}
               className="hidden"
             />
+            {/* No `capture` here: opens the phone's photo library / files instead of the camera. */}
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
             {uploadState === "done" ? (
               <div className="rounded-xl border border-green-600 bg-green-50 p-3 text-green-800">
                 <div className="flex items-center gap-3">
@@ -268,24 +316,45 @@ export default function RegisterPage() {
                     <img src={previewUrl} alt="Passport preview" className="h-14 w-14 rounded-lg object-cover" />
                   )}
                   <div className="flex-1 font-medium">✓ Passport Uploaded</div>
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="rounded-lg px-2 py-1 text-sm underline"
-                  >
-                    Retake
-                  </button>
+                  <div className="flex flex-col items-end gap-1">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-lg px-2 py-1 text-sm underline"
+                    >
+                      Retake
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => galleryInputRef.current?.click()}
+                      className="rounded-lg px-2 py-1 text-sm underline"
+                    >
+                      Upload other
+                    </button>
+                  </div>
                 </div>
               </div>
+            ) : uploadState === "uploading" ? (
+              <div className="w-full rounded-xl border border-dashed border-[#D6D1C3] bg-[#FBF9F4] px-4 py-4 text-center text-base font-medium opacity-60">
+                Uploading…
+              </div>
             ) : (
-              <button
-                type="button"
-                disabled={uploadState === "uploading"}
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full rounded-xl border border-dashed border-[#D6D1C3] bg-[#FBF9F4] px-4 py-4 text-base font-medium disabled:opacity-60"
-              >
-                {uploadState === "uploading" ? "Uploading…" : "📷 Take / choose passport photo"}
-              </button>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="rounded-xl border border-dashed border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-medium"
+                >
+                  📷 Take photo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="rounded-xl border border-dashed border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-medium"
+                >
+                  🖼️ Upload from phone
+                </button>
+              </div>
             )}
           </div>
 

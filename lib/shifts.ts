@@ -66,6 +66,14 @@ export function dayLabel(date: string): string {
   return `${dowShort(date)} ${dayMonth(date)}`;
 }
 
+const DOW_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** "Wednesday 08.10.2026" */
+export function longDayLabel(date: string): string {
+  const [y, m, d] = date.split("-");
+  return `${DOW_LONG[new Date(parseDay(date)).getUTCDay()]} ${d}.${m}.${y}`;
+}
+
 export function compareShifts(a: FlyerShift, b: FlyerShift): number {
   return a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime);
 }

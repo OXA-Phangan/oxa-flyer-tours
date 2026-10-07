@@ -20,6 +20,7 @@ import {
   compareShifts,
   dayMonth,
   dowShort,
+  longDayLabel,
   tourLabel,
   weekStart,
   type FlyerShift,
@@ -38,7 +39,20 @@ type EditorState = {
   tourId: string;
   note: string;
   repeat: string[];
+  /** Other volunteers who do the same shift (new shifts only). */
+  team: string[];
+  /** True once the admin changed a time by hand — tour presets then stop overwriting it. */
+  timesTouched: boolean;
+  /** Opened via the top "+ Add shift" button: volunteer and date are chosen in the dialog. */
+  pick: boolean;
 };
+
+// Standard shift times per tour type. Full day 13:00–21:00, everything else
+// (half day, starter) 15:00–20:00. Still adjustable in the dialog.
+function tourTimes(tourName: string | undefined): { start: string; end: string } {
+  if ((tourName ?? "").toLowerCase().includes("full")) return { start: "13:00", end: "21:00" };
+  return { start: "15:00", end: "20:00" };
+}
 
 const fieldInput =
   "block w-full min-w-0 appearance-none rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base text-[#201E1B] min-h-[50px] focus:border-[#201E1B] focus:outline-none disabled:bg-[#FBF9F4] disabled:text-[#5C5850]";
@@ -150,11 +164,14 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
       shiftId: null,
       volunteerId: volunteerId ?? visible[0]?.id ?? "",
       date: date ?? fallbackDate,
-      startTime: "14:00",
-      endTime: "18:00",
+      startTime: tourTimes(undefined).start,
+      endTime: tourTimes(undefined).end,
       tourId: "",
       note: "",
       repeat: [],
+      team: [],
+      timesTouched: false,
+      pick: !volunteerId,
     });
   }
 
@@ -171,6 +188,18 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
       tourId: s.tourId ?? "",
       note: s.note ?? "",
       repeat: [],
+      team: [],
+      timesTouched: true,
+      pick: false,
+    });
+  }
+
+  function chooseTour(tourId: string) {
+    setEditor((e) => {
+      if (!e) return e;
+      if (e.timesTouched) return { ...e, tourId };
+      const t = tourTimes(routes.find((r) => r.id === tourId)?.name);
+      return { ...e, tourId, startTime: t.start, endTime: t.end };
     });
   }
 
@@ -193,9 +222,7 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
     if (editor.endTime <= editor.startTime) return setFormError("The end time must be after the start time.");
 
     const route = routes.find((r) => r.id === editor.tourId) ?? null;
-    const base = {
-      volunteerToken: vol.id,
-      volunteerName: vol.name,
+    const common = {
       startTime: editor.startTime,
       endTime: editor.endTime,
       tourId: route?.id ?? null,
@@ -203,21 +230,27 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
       tourRegion: route?.region ?? null,
       note: editor.note.trim() || null,
     };
+    const base = { ...common, volunteerToken: vol.id, volunteerName: vol.name };
 
     setBusy(true);
     setFormError(null);
     try {
       if (editor.mode === "new") {
         const dates = Array.from(new Set([editor.date, ...editor.repeat]));
+        const people = [vol, ...(volunteers ?? []).filter((v) => v.id !== vol.id && editor.team.includes(v.id))];
         const batch = writeBatch(db);
-        for (const date of dates) {
-          batch.set(doc(collection(db, "flyerVolunteers", vol.id, "shifts")), {
-            ...base,
-            date,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            createdBy: adminEmail,
-          });
+        for (const person of people) {
+          for (const date of dates) {
+            batch.set(doc(collection(db, "flyerVolunteers", person.id, "shifts")), {
+              ...common,
+              volunteerToken: person.id,
+              volunteerName: person.name,
+              date,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+              createdBy: adminEmail,
+            });
+          }
         }
         await batch.commit();
       } else if (editor.shiftId) {
@@ -253,6 +286,14 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
   }
 
   const editorVol = editor ? (volunteers ?? []).find((v) => v.id === editor.volunteerId) ?? null : null;
+  // Other volunteers who are staying on the chosen day and can share the shift.
+  const teamCandidates =
+    editor && editor.mode === "new"
+      ? (volunteers ?? [])
+          .filter((v) => v.id !== editor.volunteerId && v.checkInDate <= editor.date && v.checkOutDate >= editor.date)
+          .sort((a, b) => a.name.localeCompare(b.name))
+      : [];
+
   const outsideStay =
     !!editor &&
     !!editorVol &&
@@ -390,75 +431,55 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
             className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 text-[#201E1B] sm:max-w-md sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="mb-4 text-xl font-semibold">{editor.mode === "new" ? "Add shift" : "Edit shift"}</h2>
+            <h2 className="text-xl font-semibold">
+              {editor.mode === "new" ? "Add Shift" : "Edit Shift"}
+              {!editor.pick && editor.date ? ` – ${longDayLabel(editor.date)}` : ""}
+            </h2>
+            {!editor.pick && editorVol && (
+              <p className="mb-4 mt-0.5 text-sm text-[#5C5850]">{editorVol.name}</p>
+            )}
+            {editor.pick && <div className="mb-4" />}
 
             <div className="space-y-4">
-              <div>
-                <label htmlFor="shift-vol" className={fieldLabel}>
-                  Volunteer
-                </label>
-                <select
-                  id="shift-vol"
-                  value={editor.volunteerId}
-                  disabled={editor.mode === "edit"}
-                  onChange={(e) => patch({ volunteerId: e.target.value })}
-                  className={fieldInput}
-                >
-                  {(editor.mode === "edit" && editorVol && !visible.some((v) => v.id === editorVol.id)
-                    ? [editorVol, ...visible]
-                    : visible
-                  ).map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {editor.pick && (
+                <>
+                  <div>
+                    <label htmlFor="shift-vol" className={fieldLabel}>
+                      Volunteer
+                    </label>
+                    <select
+                      id="shift-vol"
+                      value={editor.volunteerId}
+                      onChange={(e) => patch({ volunteerId: e.target.value, team: [] })}
+                      className={fieldInput}
+                    >
+                      {visible.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="shift-date" className={fieldLabel}>
+                      Date
+                    </label>
+                    <input
+                      id="shift-date"
+                      type="date"
+                      value={editor.date}
+                      onChange={(e) => patch({ date: e.target.value, team: [] })}
+                      className={fieldInput}
+                    />
+                  </div>
+                </>
+              )}
 
-              <div>
-                <label htmlFor="shift-date" className={fieldLabel}>
-                  Date
-                </label>
-                <input
-                  id="shift-date"
-                  type="date"
-                  value={editor.date}
-                  onChange={(e) => patch({ date: e.target.value })}
-                  className={fieldInput}
-                />
-                {outsideStay && editorVol && (
-                  <p className="mt-1.5 text-sm text-amber-800">
-                    This date is outside {editorVol.name}&apos;s stay ({editorVol.checkInDate} → {editorVol.checkOutDate}).
-                  </p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="shift-start" className={fieldLabel}>
-                    Start
-                  </label>
-                  <input
-                    id="shift-start"
-                    type="time"
-                    value={editor.startTime}
-                    onChange={(e) => patch({ startTime: e.target.value })}
-                    className={fieldInput}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="shift-end" className={fieldLabel}>
-                    End
-                  </label>
-                  <input
-                    id="shift-end"
-                    type="time"
-                    value={editor.endTime}
-                    onChange={(e) => patch({ endTime: e.target.value })}
-                    className={fieldInput}
-                  />
-                </div>
-              </div>
+              {outsideStay && editorVol && (
+                <p className="text-sm text-amber-800">
+                  This day is outside {editorVol.name}&apos;s stay ({editorVol.checkInDate} → {editorVol.checkOutDate}).
+                </p>
+              )}
 
               <div>
                 <label htmlFor="shift-tour" className={fieldLabel}>
@@ -467,7 +488,7 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
                 <select
                   id="shift-tour"
                   value={editor.tourId}
-                  onChange={(e) => patch({ tourId: e.target.value })}
+                  onChange={(e) => chooseTour(e.target.value)}
                   className={fieldInput}
                 >
                   <option value="">No tour</option>
@@ -481,14 +502,43 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
                     </optgroup>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="shift-start" className={fieldLabel}>
+                      Start
+                    </label>
+                    <input
+                      id="shift-start"
+                      type="time"
+                      value={editor.startTime}
+                      onChange={(e) => patch({ startTime: e.target.value, timesTouched: true })}
+                      className={fieldInput}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="shift-end" className={fieldLabel}>
+                      End
+                    </label>
+                    <input
+                      id="shift-end"
+                      type="time"
+                      value={editor.endTime}
+                      onChange={(e) => patch({ endTime: e.target.value, timesTouched: true })}
+                      className={fieldInput}
+                    />
+                  </div>
+                </div>
                 <p className="mt-1.5 text-sm text-[#5C5850]">
-                  Choose “No tour” for briefings, preparation or standby shifts.
+                  Standard times: Full Day 13:00–21:00, Half Day / Starter 15:00–20:00. You can adjust them.
                 </p>
               </div>
 
               <div>
                 <label htmlFor="shift-note" className={fieldLabel}>
-                  Note for the volunteer <span className="font-normal text-[#5C5850]">(optional)</span>
+                  Notes <span className="font-normal text-[#5C5850]">(optional)</span>
                 </label>
                 <textarea
                   id="shift-note"
@@ -498,6 +548,40 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
                   className={`${fieldInput} resize-none`}
                 />
               </div>
+
+              {editor.mode === "new" && (
+                <div>
+                  <span className={fieldLabel}>
+                    Add team member <span className="font-normal text-[#5C5850]">(optional – same shift)</span>
+                  </span>
+                  {teamCandidates.length === 0 ? (
+                    <p className="text-sm text-[#5C5850]">No other volunteers are staying on this day.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {teamCandidates.map((v) => {
+                        const on = editor.team.includes(v.id);
+                        return (
+                          <button
+                            key={v.id}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() =>
+                              patch({ team: on ? editor.team.filter((x) => x !== v.id) : [...editor.team, v.id] })
+                            }
+                            className={`h-11 rounded-xl border px-3 text-sm ${
+                              on
+                                ? "border-[#201E1B] bg-[#201E1B] font-semibold text-white"
+                                : "border-[#E2DFD6] bg-white text-[#201E1B]"
+                            }`}
+                          >
+                            {v.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {editor.mode === "new" && (
                 <div>

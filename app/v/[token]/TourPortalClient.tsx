@@ -144,7 +144,10 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [tour, setTour] = useState<TourState>({ currentIndex: 0, statusMap: {}, skipReasons: {} });
   const [uploadState, setUploadState] = useState<Record<number, "uploading" | "success" | "failure">>({});
 
-  const [regionSheetKey, setRegionSheetKey] = useState<string | null>(null);
+  const [toursOpen, setToursOpen] = useState(false);
+  const [bikeOpen, setBikeOpen] = useState(false);
+  // Today's shift the volunteer tapped, awaiting "Start today's tour?" confirmation.
+  const [startConfirmId, setStartConfirmId] = useState<string | null>(null);
   const [skipSheetOpen, setSkipSheetOpen] = useState(false);
   const [skipWarning, setSkipWarning] = useState<{ targetIndex: number } | null>(null);
 
@@ -259,7 +262,8 @@ export default function TourPortalClient({ token }: { token: string }) {
   );
 
   async function selectRoute(route: FlyerRoute) {
-    setRegionSheetKey(null);
+    setToursOpen(false);
+    setStartConfirmId(null);
     setActiveRoute(route);
     setUploadState({});
 
@@ -728,17 +732,47 @@ export default function TourPortalClient({ token }: { token: string }) {
             {todays.map((s) => {
               const label = tourLabel(s);
               const route = s.tourId ? routes?.find((r) => r.id === s.tourId) ?? null : null;
-              return (
-                <div key={s.id} className="rounded-2xl border border-[#E2C27A] bg-[#FFF3D6] p-4">
+              const confirming = startConfirmId === s.id;
+              const body = (
+                <>
                   <p className="text-2xl font-semibold">
                     {s.startTime}–{s.endTime}
                   </p>
                   <p className="mt-1 text-base font-medium">{label ?? "No tour planned"}</p>
                   {s.note && <p className="mt-2 text-sm text-[#44403A]">{s.note}</p>}
-                  {route && (
-                    <button type="button" onClick={() => selectRoute(route)} className={`${primaryButton} mt-3`}>
-                      Open tour
-                    </button>
+                  {route && !confirming && (
+                    <p className="mt-2 text-sm font-semibold text-[#5C5850]">Tap to start today&apos;s tour →</p>
+                  )}
+                </>
+              );
+              if (!route) {
+                return (
+                  <div key={s.id} className="rounded-2xl border border-[#E2C27A] bg-[#FFF3D6] p-4">
+                    {body}
+                  </div>
+                );
+              }
+              return (
+                <div key={s.id} className="rounded-2xl border border-[#E2C27A] bg-[#FFF3D6]">
+                  <button
+                    type="button"
+                    onClick={() => setStartConfirmId(confirming ? null : s.id)}
+                    className="block w-full rounded-2xl p-4 text-left"
+                  >
+                    {body}
+                  </button>
+                  {confirming && (
+                    <div className="border-t border-[#E2C27A] p-4">
+                      <p className="mb-3 text-base font-semibold">Start today&apos;s tour?</p>
+                      <div className="flex gap-3">
+                        <button type="button" onClick={() => setStartConfirmId(null)} className={secondaryButton}>
+                          Not now
+                        </button>
+                        <button type="button" onClick={() => selectRoute(route)} className={primaryButton}>
+                          Start tour
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               );
@@ -770,7 +804,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     );
   }
 
-  if (screen === "picker" || regionSheetKey) {
+  if (screen === "picker") {
     return (
       <Shell>
         <div className="mb-6">
@@ -824,7 +858,22 @@ export default function TourPortalClient({ token }: { token: string }) {
           </p>
         </button>
 
-        <div className="mb-6 flex gap-3">
+        <button
+          type="button"
+          onClick={() => setToursOpen(true)}
+          className={`${cardClass} mb-6 block w-full p-4 text-left active:bg-[#FBF9F4]`}
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">🛵 Flyer Tours</p>
+          <p className="mt-1 font-semibold">
+            {routes === null
+              ? "Loading…"
+              : regions.length === 0
+                ? "No routes set up yet"
+                : `${regions.length} area${regions.length === 1 ? "" : "s"} · ${routes.length} tours`}
+          </p>
+        </button>
+
+        <div className="mb-3 flex gap-3">
           <button
             type="button"
             onClick={() => setChatOpen("direct")}
@@ -855,60 +904,78 @@ export default function TourPortalClient({ token }: { token: string }) {
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={openSupplySheet}
-          className={`${cardClass} mb-6 block w-full p-4 text-left font-semibold active:bg-[#FBF9F4]`}
-        >
-          📦 Report missing supplies
-        </button>
-
-        {regions.length === 0 && (
-          <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
-            No routes have been set up yet. Check back soon.
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {regions.map(([region]) => (
-            <button
-              key={region}
-              type="button"
-              onClick={() => setRegionSheetKey(region)}
-              className={`${cardClass} block w-full p-4 text-left text-lg font-semibold active:bg-[#FBF9F4]`}
-            >
-              {region}
-            </button>
-          ))}
+        <div className="mb-6 flex gap-3">
+          <button
+            type="button"
+            onClick={openSupplySheet}
+            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+          >
+            📦 Report missing supplies
+          </button>
+          <button
+            type="button"
+            onClick={() => setBikeOpen(true)}
+            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+          >
+            🏍️ Rent a bike
+          </button>
         </div>
 
-        {regionSheetKey && (
+        {toursOpen && (
           <div
             className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
-            onClick={() => setRegionSheetKey(null)}
+            onClick={() => setToursOpen(false)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-6 sm:rounded-2xl"
             >
-              <h2 className="mb-4 text-lg font-semibold">{regionSheetKey}</h2>
-              <div className="space-y-3">
-                {(regions.find(([r]) => r === regionSheetKey)?.[1] ?? []).map((route) => (
-                  <button
-                    key={route.id}
-                    type="button"
-                    onClick={() => selectRoute(route)}
-                    className={`${cardClass} block w-full p-4 text-left font-medium active:bg-[#FBF9F4]`}
-                  >
-                    {route.name}
-                    <span className="block text-sm font-normal text-[#5C5850]">
-                      {route.spots.length} spot{route.spots.length === 1 ? "" : "s"}
-                    </span>
-                  </button>
+              <h2 className="mb-4 text-lg font-semibold">Flyer Tours</h2>
+              {regions.length === 0 && (
+                <p className="text-sm text-[#5C5850]">No routes have been set up yet. Check back soon.</p>
+              )}
+              <div className="space-y-5">
+                {regions.map(([region, list]) => (
+                  <div key={region}>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{region}</p>
+                    <div className="space-y-3">
+                      {list.map((route) => (
+                        <button
+                          key={route.id}
+                          type="button"
+                          onClick={() => selectRoute(route)}
+                          className={`${cardClass} block w-full p-4 text-left font-medium active:bg-[#FBF9F4]`}
+                        >
+                          {route.name}
+                          <span className="block text-sm font-normal text-[#5C5850]">
+                            {route.spots.length} spot{route.spots.length === 1 ? "" : "s"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
-              <button type="button" onClick={() => setRegionSheetKey(null)} className={`${secondaryButton} mt-4`}>
-                Cancel
+              <button type="button" onClick={() => setToursOpen(false)} className={`${secondaryButton} mt-4`}>
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
+        {bikeOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+            onClick={() => setBikeOpen(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-t-2xl bg-white p-6 sm:rounded-2xl"
+            >
+              <h2 className="mb-2 text-lg font-semibold">Rent a bike</h2>
+              <p className="mb-5 text-sm text-[#5C5850]">Coming soon.</p>
+              <button type="button" onClick={() => setBikeOpen(false)} className={primaryButton}>
+                Close
               </button>
             </div>
           </div>
