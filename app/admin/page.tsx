@@ -7,6 +7,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
@@ -326,7 +327,7 @@ function crewHref(sub: CrewSub): string {
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
   const { tab: urlTab, sub: urlSub } = useAdminLocation();
-  const chat = useAdminChat();
+  const chat = useAdminChat(adminEmail);
   const chatUnread = chat.groupUnread || Object.values<ChatThreadDoc>(chat.threads).some((t) => t.unreadByAdmin === true);
 
   // Old bookmarks: ?tab=registrations / ?tab=shifts / ?tab=group-chat now live elsewhere.
@@ -1824,10 +1825,12 @@ const GROUP_SEEN_KEY = "flyerAdminGroupSeen";
  * newest group message. Direct-chat unread state lives on the thread docs;
  * the group chat has no per-reader state, so "seen" is kept in this browser.
  */
-function useAdminChat() {
+function useAdminChat(adminEmail: string) {
   const [threads, setThreads] = useState<Record<string, ChatThreadDoc>>({});
   const [groupLatest, setGroupLatest] = useState<GroupLatest | null>(null);
   const [groupSeenMs, setGroupSeenMs] = useState<number | null>(null);
+  // True once the synced "seen" marker in Firestore has been looked at (or failed to load).
+  const [remoteChecked, setRemoteChecked] = useState(false);
 
   useEffect(() => {
     return onSnapshot(
@@ -1865,23 +1868,59 @@ function useAdminChat() {
     );
   }, []);
 
+  // "Seen" lives in localStorage (this browser) and, so it is also in sync between
+  // devices and readable by the management portal, in flyerAdminState/groupChat.
+  const saveSeenRemote = useCallback(
+    (ms: number) => {
+      setDoc(
+        doc(db, "flyerAdminState", "groupChat"),
+        { seenAt: Timestamp.fromMillis(ms), seenBy: adminEmail },
+        { merge: true }
+      ).catch((err) => console.error("[admin] saving group chat seen marker failed:", err));
+    },
+    [adminEmail]
+  );
+
   useEffect(() => {
-    setGroupSeenMs(readSeen(GROUP_SEEN_KEY));
+    const local = readSeen(GROUP_SEEN_KEY);
+    setGroupSeenMs(local);
+    let cancelled = false;
+    getDoc(doc(db, "flyerAdminState", "groupChat"))
+      .then((snap) => {
+        if (cancelled || !snap.exists()) return;
+        const remote = (snap.data().seenAt as Timestamp | undefined)?.toMillis();
+        if (remote !== undefined && remote > (local ?? 0)) {
+          writeSeen(GROUP_SEEN_KEY, remote);
+          setGroupSeenMs(remote);
+        }
+      })
+      .catch((err) => console.error("[admin] loading group chat seen marker failed:", err))
+      .finally(() => {
+        if (!cancelled) setRemoteChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // First visit on this device: treat existing messages as seen, so the
-  // dot only ever means "something new since you were last here".
+  // First visit on this device (and nothing synced yet): treat existing messages as
+  // seen, so the dot only ever means "something new since you were last here".
   useEffect(() => {
-    if (groupLatest && groupSeenMs === null) {
+    if (groupLatest && groupSeenMs === null && remoteChecked) {
       writeSeen(GROUP_SEEN_KEY, groupLatest.ms);
       setGroupSeenMs(groupLatest.ms);
+      saveSeenRemote(groupLatest.ms);
     }
-  }, [groupLatest, groupSeenMs]);
+  }, [groupLatest, groupSeenMs, remoteChecked, saveSeenRemote]);
 
-  const markGroupSeen = useCallback((ms: number) => {
-    writeSeen(GROUP_SEEN_KEY, ms);
-    setGroupSeenMs((prev) => (prev !== null && prev >= ms ? prev : ms));
-  }, []);
+  const markGroupSeen = useCallback(
+    (ms: number) => {
+      writeSeen(GROUP_SEEN_KEY, ms);
+      setGroupSeenMs((prev) => (prev !== null && prev >= ms ? prev : ms));
+      saveSeenRemote(ms);
+    },
+    [saveSeenRemote]
+  );
 
   const groupUnread = !!groupLatest && groupLatest.fromVolunteer && groupSeenMs !== null && groupLatest.ms > groupSeenMs;
 

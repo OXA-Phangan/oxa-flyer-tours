@@ -137,6 +137,57 @@ function countOpenBetween(spots: Spot[], statusMap: Record<number, SpotStatus>, 
   return count;
 }
 
+/* ===================== Tour event log ===================== */
+
+type TourEventType =
+  | "tour_start"
+  | "spot_completed"
+  | "spot_skipped"
+  | "spot_passed"
+  | "break_start"
+  | "break_end"
+  | "tour_finished";
+
+type TourEventExtra = {
+  spotIndex?: number;
+  spot?: Spot;
+  reason?: string;
+  proofStoragePath?: string;
+};
+
+/**
+ * Append-only log in flyerTourEvents (never updated or deleted) — read by the
+ * management dashboard for the tour timeline. Fire-and-forget: a failed log
+ * write must never block or break the tour.
+ */
+function logTourEvent(
+  volunteerId: string,
+  volunteerName: string,
+  type: TourEventType,
+  route: FlyerRoute | null,
+  extra: TourEventExtra = {}
+) {
+  try {
+    addDoc(collection(db, "flyerTourEvents"), {
+      volunteerId,
+      volunteerName,
+      day: bangkokToday(),
+      region: route?.region ?? null,
+      routeId: route?.id ?? null,
+      routeName: route?.name ?? null,
+      type,
+      spotIndex: extra.spotIndex ?? null,
+      spotName: extra.spot?.name ?? null,
+      spotType: extra.spot?.type ?? null,
+      reason: extra.reason ?? null,
+      proofStoragePath: extra.proofStoragePath ?? null,
+      at: serverTimestamp(),
+    }).catch((err) => console.error("[tour] event log failed:", err));
+  } catch (err) {
+    console.error("[tour] event log failed:", err);
+  }
+}
+
 /* ===================== Component ===================== */
 
 export default function TourPortalClient({ token }: { token: string }) {
@@ -183,6 +234,10 @@ export default function TourPortalClient({ token }: { token: string }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tourRef = useRef(tour);
   tourRef.current = tour;
+  const volunteerNameRef = useRef("");
+  volunteerNameRef.current = volunteer?.name ?? "";
+  const logEvent = (type: TourEventType, route: FlyerRoute | null, extra?: TourEventExtra) =>
+    logTourEvent(token, volunteerNameRef.current, type, route, extra);
 
   // ---- Load volunteer + routes on mount ----
   useEffect(() => {
@@ -280,6 +335,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     setUploadState({});
 
     let next: TourState = { currentIndex: 0, statusMap: {}, skipReasons: {} };
+    let resumed = false;
     try {
       const existing = await getDoc(doc(db, "flyerTourProgress", progressDocId(token, route)));
       if (existing.exists()) {
@@ -301,6 +357,7 @@ export default function TourPortalClient({ token }: { token: string }) {
           const skipReasons: Record<number, string> = {};
           Object.entries(data.skipReasons ?? {}).forEach(([k, v]) => (skipReasons[Number(k)] = v));
           next = { currentIndex: data.currentIndex ?? 0, statusMap, skipReasons };
+          resumed = true;
         }
       }
     } catch (err) {
@@ -315,6 +372,8 @@ export default function TourPortalClient({ token }: { token: string }) {
     setTour(next);
     setScreen("tour");
     persist(route, next);
+    // Only a fresh start for today counts — resuming a tour from the same day doesn't.
+    if (!resumed) logEvent("tour_start", route);
   }
 
   function backToPicker() {
@@ -357,6 +416,7 @@ export default function TourPortalClient({ token }: { token: string }) {
       setTour(next);
     }
     persist(activeRoute, next);
+    logEvent("tour_finished", activeRoute);
     setScreen("completion");
   }
 
@@ -365,6 +425,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     const sp = activeRoute.spots[tour.currentIndex];
     const resolved = isResolvable(sp) || tour.statusMap[tour.currentIndex] !== "open";
     if (!resolved) return;
+    if (isResolvable(sp)) logEvent("spot_passed", activeRoute, { spotIndex: tour.currentIndex, spot: sp });
     if (tour.currentIndex === activeRoute.spots.length - 1) {
       finishRoute();
       return;
@@ -386,6 +447,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     statusMap[target] = "skipped";
     skipReasons[target] = reason;
     setSkipSheetOpen(false);
+    logEvent("spot_skipped", activeRoute, { spotIndex: target, spot: activeRoute.spots[target], reason });
 
     const isLast = target === activeRoute.spots.length - 1;
     const next: TourState = {
@@ -432,6 +494,7 @@ export default function TourPortalClient({ token }: { token: string }) {
         deleteAfter: proofDeleteAfter(),
       });
 
+      logEvent("spot_completed", activeRoute, { spotIndex, spot: sp, proofStoragePath: storagePath });
       setUploadState((s) => ({ ...s, [spotIndex]: "success" }));
       const skipReasons = { ...tourRef.current.skipReasons };
       delete skipReasons[spotIndex];
@@ -464,6 +527,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     if (!volunteer) return;
     const nextOnBreak = !volunteer.onBreak;
     setVolunteer({ ...volunteer, onBreak: nextOnBreak });
+    logEvent(nextOnBreak ? "break_start" : "break_end", screen === "tour" ? activeRoute : null);
     try {
       await updateDoc(doc(db, "flyerVolunteers", token), { onBreak: nextOnBreak });
     } catch (err) {
