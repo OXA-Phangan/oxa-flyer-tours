@@ -329,13 +329,6 @@ export default function TourPortalClient({ token }: { token: string }) {
     persist(activeRoute, next);
   }
 
-  function goPrev() {
-    if (tour.currentIndex <= 0 || !activeRoute) return;
-    const next = { ...tour, currentIndex: tour.currentIndex - 1 };
-    setTour(next);
-    persist(activeRoute, next);
-  }
-
   function finishRoute(finalTour?: TourState) {
     if (!activeRoute) return;
     const base = finalTour ?? tour;
@@ -706,6 +699,49 @@ export default function TourPortalClient({ token }: { token: string }) {
   }
 
   /* ===================== Screens ===================== */
+
+  const chatSheet = chatOpen ? (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+            onClick={() => setChatOpen(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
+            >
+              <div className="p-6 pb-4">
+                <h2 className="text-lg font-semibold">{chatOpen === "direct" ? "Message OXA" : "Group Chat"}</h2>
+              </div>
+
+              <div className="flex-1 space-y-2 overflow-y-auto px-6">
+                {(() => {
+                  const list = chatOpen === "direct" ? directMessages : groupMessages;
+                  if (list === null) return <p className="text-sm text-[#5C5850]">Loading…</p>;
+                  if (list.length === 0) return <p className="text-sm text-[#5C5850]">No messages yet.</p>;
+                  return list.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+                        m.senderRole === "volunteer" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+                      }`}
+                    >
+                      {chatOpen === "group" && m.senderRole !== "volunteer" && (
+                        <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">OXA Team</div>
+                      )}
+                      {chatOpen === "group" && m.senderRole === "volunteer" && (
+                        <div className="mb-0.5 text-xs font-semibold text-white/70">{m.senderName}</div>
+                      )}
+                      <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              <div className="p-6 pt-4">
+                <ChatComposer inputClassName={fieldInput} onSendText={sendChatText} onSendMedia={sendChatMedia} />
+              </div>
+            </div>
+          </div>) : null;
 
   if (screen === "loading") {
     return (
@@ -1090,49 +1126,7 @@ export default function TourPortalClient({ token }: { token: string }) {
           </div>
         )}
 
-        {chatOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
-            onClick={() => setChatOpen(null)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
-            >
-              <div className="p-6 pb-4">
-                <h2 className="text-lg font-semibold">{chatOpen === "direct" ? "Message OXA" : "Group Chat"}</h2>
-              </div>
-
-              <div className="flex-1 space-y-2 overflow-y-auto px-6">
-                {(() => {
-                  const list = chatOpen === "direct" ? directMessages : groupMessages;
-                  if (list === null) return <p className="text-sm text-[#5C5850]">Loading…</p>;
-                  if (list.length === 0) return <p className="text-sm text-[#5C5850]">No messages yet.</p>;
-                  return list.map((m) => (
-                    <div
-                      key={m.id}
-                      className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
-                        m.senderRole === "volunteer" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
-                      }`}
-                    >
-                      {chatOpen === "group" && m.senderRole !== "volunteer" && (
-                        <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">OXA Team</div>
-                      )}
-                      {chatOpen === "group" && m.senderRole === "volunteer" && (
-                        <div className="mb-0.5 text-xs font-semibold text-white/70">{m.senderName}</div>
-                      )}
-                      <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
-                    </div>
-                  ));
-                })()}
-              </div>
-
-              <div className="p-6 pt-4">
-                <ChatComposer inputClassName={fieldInput} onSendText={sendChatText} onSendMedia={sendChatMedia} />
-              </div>
-            </div>
-          </div>
-        )}
+        {chatSheet}
 
         {supplySheetOpen && (
           <div
@@ -1275,9 +1269,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                     uploadState={uploadState[i]}
                     onCamera={triggerCamera}
                     onSkip={openSkipSheet}
-                    onPrev={goPrev}
                     onNext={goNext}
-                    canGoPrev={i > 0}
                   />
                 ) : (
                   <CollapsedSpotRow
@@ -1300,10 +1292,16 @@ export default function TourPortalClient({ token }: { token: string }) {
           <div className="mx-auto flex max-w-md gap-3">
             <button
               type="button"
-              disabled
-              title="Coming soon"
-              className="flex-1 rounded-2xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold text-[#201E1B] opacity-50"
+              onClick={() => setChatOpen("direct")}
+              className="relative flex-1 rounded-2xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold text-[#201E1B]"
             >
+              {directUnread && (
+                <span
+                  role="img"
+                  aria-label="New message"
+                  className="absolute left-2 top-2 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"
+                />
+              )}
               💬 Chat
             </button>
             <button
@@ -1319,6 +1317,8 @@ export default function TourPortalClient({ token }: { token: string }) {
             </button>
           </div>
         </div>
+
+        {chatSheet}
 
         {skipSheetOpen && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setSkipSheetOpen(false)}>
@@ -1416,9 +1416,7 @@ function ActiveSpotCard({
   uploadState,
   onCamera,
   onSkip,
-  onPrev,
   onNext,
-  canGoPrev,
 }: {
   index: number;
   spot: Spot;
@@ -1427,12 +1425,9 @@ function ActiveSpotCard({
   uploadState: "uploading" | "success" | "failure" | undefined;
   onCamera: () => void;
   onSkip: () => void;
-  onPrev: () => void;
   onNext: () => void;
-  canGoPrev: boolean;
 }) {
   const resolvable = isResolvable(spot);
-  const resolved = resolvable || status !== "open";
 
   return (
     <div className={`${cardClass} p-4`}>
@@ -1448,67 +1443,53 @@ function ActiveSpotCard({
       <h2 className="mb-3 text-lg font-semibold">
         {index + 1}. {spot.name}
       </h2>
-      {spot.comment && (
-        <div className="mb-4 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-sm leading-relaxed">{spot.comment}</div>
-      )}
-
-      {!resolvable && (
-        <>
-          {uploadState === "uploading" ? (
-            <button type="button" disabled className="mb-3 w-full rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-4 py-4 text-base font-semibold opacity-70">
-              ⌛ Uploading…
-            </button>
-          ) : uploadState === "success" || status === "completed" ? (
-            <button type="button" disabled className="mb-3 w-full rounded-xl border-2 border-[#3E8E5A] bg-[#EAF5EE] px-4 py-4 text-base font-semibold text-[#3E8E5A]">
-              ✅ Picture Uploaded
-            </button>
-          ) : uploadState === "failure" ? (
-            <button type="button" onClick={onCamera} className="mb-3 w-full rounded-xl border-2 border-[#C0392B] bg-[#F7E9E7] px-4 py-4 text-base font-semibold text-[#C0392B]">
-              ❌ Failed. Try Again
-            </button>
-          ) : (
-            <button type="button" onClick={onCamera} className="mb-3 w-full rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-4 py-4 text-base font-semibold">
-              📸 Take a Picture
-            </button>
-          )}
-        </>
-      )}
-
-      {!resolvable && status !== "completed" && (
-        <button type="button" onClick={onSkip} className="mb-3 flex w-full items-center justify-center gap-2 py-2 text-sm font-semibold text-[#5C5850]">
-          ⏭️ Skip Spot
-        </button>
-      )}
-
       {spot.mapsLink && (
         <a
           href={spot.mapsLink}
           target="_blank"
           rel="noopener noreferrer"
-          className="mb-3 block w-full rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-center text-base font-semibold"
+          className="mb-4 block w-full rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-center text-base font-semibold"
         >
-          📍 Navigate
+          📍 Google Maps Location
         </a>
       )}
+      {spot.comment && (
+        <div className="mb-4 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-sm leading-relaxed">{spot.comment}</div>
+      )}
 
-      <div className="flex gap-3">
-        <button
-          type="button"
-          onClick={onPrev}
-          disabled={!canGoPrev}
-          className="flex-1 rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold disabled:opacity-40"
-        >
-          ← Prev
-        </button>
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!resolved}
-          className="flex-1 rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold disabled:opacity-40"
-        >
+      {!resolvable && (
+        <div className="flex gap-3">
+          {uploadState === "uploading" ? (
+            <button type="button" disabled className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-semibold opacity-70">
+              ⌛ Uploading…
+            </button>
+          ) : uploadState === "success" || status === "completed" ? (
+            <button type="button" disabled className="flex-1 rounded-xl border-2 border-[#3E8E5A] bg-[#EAF5EE] px-3 py-4 text-base font-semibold text-[#3E8E5A]">
+              ✅ Picture Uploaded
+            </button>
+          ) : uploadState === "failure" ? (
+            <button type="button" onClick={onCamera} className="flex-1 rounded-xl border-2 border-[#C0392B] bg-[#F7E9E7] px-3 py-4 text-base font-semibold text-[#C0392B]">
+              ❌ Failed. Try Again
+            </button>
+          ) : (
+            <button type="button" onClick={onCamera} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-semibold">
+              📸 Take a Picture
+            </button>
+          )}
+          {status !== "completed" && uploadState !== "uploading" && uploadState !== "success" && (
+            <button type="button" onClick={onSkip} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-white px-3 py-4 text-base font-semibold text-[#5C5850]">
+              ⏭️ Skip Spot
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Photo and skip advance on their own; break / info spots have neither, so they need this. */}
+      {resolvable && (
+        <button type="button" onClick={onNext} className="w-full rounded-xl bg-[#201E1B] px-4 py-4 text-base font-semibold text-white">
           {isLast ? "Finish Route" : "Next →"}
         </button>
-      </div>
+      )}
     </div>
   );
 }
