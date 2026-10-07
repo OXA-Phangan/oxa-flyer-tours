@@ -256,9 +256,11 @@ export default function TourPortalClient({ token }: { token: string }) {
           currentIndex: next.currentIndex,
           statusMap: next.statusMap,
           skipReasons: next.skipReasons,
+          // Bangkok calendar day this progress belongs to — a tour opened on a
+          // later day starts fresh (see selectRoute).
+          day: bangkokToday(),
           updatedAt: serverTimestamp(),
-        },
-        { merge: true }
+        }
       ).catch((err) => console.error("[tour] failed to save progress:", err));
     },
     [token]
@@ -275,15 +277,24 @@ export default function TourPortalClient({ token }: { token: string }) {
       const existing = await getDoc(doc(db, "flyerTourProgress", progressDocId(token, route)));
       if (existing.exists()) {
         const data = existing.data() as {
+          day?: string;
+          updatedAt?: Timestamp;
           currentIndex?: number;
           statusMap?: Record<string, SpotStatus>;
           skipReasons?: Record<string, string>;
         };
-        const statusMap: Record<number, SpotStatus> = {};
-        Object.entries(data.statusMap ?? {}).forEach(([k, v]) => (statusMap[Number(k)] = v));
-        const skipReasons: Record<number, string> = {};
-        Object.entries(data.skipReasons ?? {}).forEach(([k, v]) => (skipReasons[Number(k)] = v));
-        next = { currentIndex: data.currentIndex ?? 0, statusMap, skipReasons };
+        // Progress only counts on the day it was made. Older docs have no `day`,
+        // so fall back to their last update time.
+        const savedDay =
+          data.day ??
+          (data.updatedAt ? new Date(data.updatedAt.toMillis() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10) : null);
+        if (savedDay === bangkokToday()) {
+          const statusMap: Record<number, SpotStatus> = {};
+          Object.entries(data.statusMap ?? {}).forEach(([k, v]) => (statusMap[Number(k)] = v));
+          const skipReasons: Record<number, string> = {};
+          Object.entries(data.skipReasons ?? {}).forEach(([k, v]) => (skipReasons[Number(k)] = v));
+          next = { currentIndex: data.currentIndex ?? 0, statusMap, skipReasons };
+        }
       }
     } catch (err) {
       console.error("[tour] failed to load existing progress:", err);
