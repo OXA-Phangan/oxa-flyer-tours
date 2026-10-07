@@ -28,3 +28,16 @@
       allow write: if true;
       allow delete: if isFlyerAdmin();
     }
+
+    // Chat media (photos, videos, voice messages) — path shapes:
+    //   flyerChat/{volunteerToken}/{file}
+    //   flyerChat/group/{volunteerToken | admin}/{file}
+    // Same "token = access, no browsing" model; create-only (no overwrite),
+    // size- and type-limited. Deleted by cleanupExpiredFlyerChatMedia.
+    match /flyerChat/{allPaths=**} {
+      allow get: if true;
+      allow list: if isFlyerAdmin();
+      allow create: if request.resource.size < 30 * 1024 * 1024
+                    && request.resource.contentType.matches('(image|video|audio)/.*');
+      allow update, delete: if isFlyerAdmin();
+    }

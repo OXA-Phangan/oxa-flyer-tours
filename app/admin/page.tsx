@@ -26,6 +26,9 @@ import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
 import { bangkokToday } from "@/lib/shifts";
 import { readSeen, writeSeen } from "@/lib/chat-seen";
+import { messagePreview, uploadChatMedia, type ChatMediaType, type PreparedMedia } from "@/lib/chat-media";
+import ChatComposer from "@/components/ChatComposer";
+import ChatMessageBody from "@/components/ChatMessageBody";
 
 type Registration = {
   id: string;
@@ -91,6 +94,8 @@ type ChatMessageDoc = {
   senderRole: ChatSenderRole;
   senderName: string;
   text: string;
+  mediaType?: ChatMediaType | null;
+  mediaPath?: string | null;
   createdAt: Timestamp | null;
 };
 
@@ -1690,9 +1695,6 @@ function CrewDetail({
 
 function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunteerName: string; adminEmail: string }) {
   const [messages, setMessages] = useState<ChatMessageDoc[] | null>(null);
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // Make sure the thread exists before subscribing — legacy volunteers
@@ -1733,36 +1735,36 @@ function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunt
     );
   }, [token]);
 
-  async function send() {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setSending(true);
-    setError(null);
-    try {
-      await addDoc(collection(db, "flyerChatThreads", token, "messages"), {
-        senderRole: "admin",
-        senderName: adminEmail,
-        text: trimmed,
-        createdAt: serverTimestamp(),
-      });
-      await setDoc(
-        doc(db, "flyerChatThreads", token),
-        {
-          lastMessage: trimmed,
-          lastMessageAt: serverTimestamp(),
-          lastSenderRole: "admin",
-          unreadByVolunteer: true,
-          unreadByAdmin: false,
-        },
-        { merge: true }
-      );
-      setText("");
-    } catch (err) {
-      console.error("[admin] send chat message failed:", err);
-      setError("Message failed to send. Please try again.");
-    } finally {
-      setSending(false);
-    }
+  // Throws on failure — ChatComposer shows the error.
+  async function post(text: string, mediaType: ChatMediaType | null, mediaPath: string | null) {
+    await addDoc(collection(db, "flyerChatThreads", token, "messages"), {
+      senderRole: "admin",
+      senderName: adminEmail,
+      text,
+      mediaType,
+      mediaPath,
+      createdAt: serverTimestamp(),
+    });
+    await setDoc(
+      doc(db, "flyerChatThreads", token),
+      {
+        lastMessage: messagePreview(text, mediaType),
+        lastMessageAt: serverTimestamp(),
+        lastSenderRole: "admin",
+        unreadByVolunteer: true,
+        unreadByAdmin: false,
+      },
+      { merge: true }
+    );
+  }
+
+  async function sendText(text: string) {
+    await post(text, null, null);
+  }
+
+  async function sendMedia(media: PreparedMedia) {
+    const path = await uploadChatMedia(token, media);
+    await post("", media.type, path);
   }
 
   return (
@@ -1779,33 +1781,12 @@ function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunt
               m.senderRole === "admin" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
             }`}
           >
-            {m.text}
+            <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
           </div>
         ))}
       </div>
 
-      {error && <p className="mb-2 text-sm text-red-800">{error}</p>}
-
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") send();
-          }}
-          placeholder="Type a message…"
-          className={spotTextInput}
-        />
-        <button
-          type="button"
-          onClick={send}
-          disabled={sending || !text.trim()}
-          className="shrink-0 rounded-lg bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-        >
-          Send
-        </button>
-      </div>
+      <ChatComposer inputClassName={spotTextInput} onSendText={sendText} onSendMedia={sendMedia} />
     </div>
   );
 }
@@ -1848,11 +1829,11 @@ function useAdminChat() {
           setGroupLatest(null);
           return;
         }
-        const data = d.data() as { senderRole?: ChatSenderRole; senderName?: string; text?: string; createdAt?: Timestamp | null };
+        const data = d.data() as { senderRole?: ChatSenderRole; senderName?: string; text?: string; mediaType?: ChatMediaType | null; createdAt?: Timestamp | null };
         setGroupLatest({
           ms: data.createdAt?.toMillis() ?? Date.now(),
           fromVolunteer: data.senderRole === "volunteer",
-          text: data.text ?? "",
+          text: messagePreview(data.text, data.mediaType),
           senderName: data.senderName ?? "",
         });
       },
@@ -2021,8 +2002,6 @@ function ChatSection({ adminEmail, chat }: { adminEmail: string; chat: ReturnTyp
 
 function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: (ms: number) => void }) {
   const [messages, setMessages] = useState<ChatMessageDoc[] | null>(null);
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -2044,25 +2023,25 @@ function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function send() {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setSending(true);
-    setError(null);
-    try {
-      await addDoc(collection(db, "flyerGroupMessages"), {
-        senderRole: "admin",
-        senderName: adminEmail,
-        text: trimmed,
-        createdAt: serverTimestamp(),
-      });
-      setText("");
-    } catch (err) {
-      console.error("[admin] send group message failed:", err);
-      setError("Message failed to send. Please try again.");
-    } finally {
-      setSending(false);
-    }
+  // Throws on failure — ChatComposer shows the error.
+  async function post(text: string, mediaType: ChatMediaType | null, mediaPath: string | null) {
+    await addDoc(collection(db, "flyerGroupMessages"), {
+      senderRole: "admin",
+      senderName: adminEmail,
+      text,
+      mediaType,
+      mediaPath,
+      createdAt: serverTimestamp(),
+    });
+  }
+
+  async function sendText(text: string) {
+    await post(text, null, null);
+  }
+
+  async function sendMedia(media: PreparedMedia) {
+    const path = await uploadChatMedia("group/admin", media);
+    await post("", media.type, path);
   }
 
   async function removeMessage(id: string) {
@@ -2098,7 +2077,9 @@ function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: 
                 <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">{m.senderName}</div>
               )}
               <div className="flex items-start justify-between gap-2">
-                <span>{m.text}</span>
+                <span className="min-w-0">
+                  <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
+                </span>
                 <button
                   type="button"
                   onClick={() => removeMessage(m.id)}
@@ -2115,26 +2096,12 @@ function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: 
 
         {error && <p className="mb-2 text-sm text-red-800">{error}</p>}
 
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") send();
-            }}
-            placeholder="Message all active volunteers…"
-            className={spotTextInput}
-          />
-          <button
-            type="button"
-            onClick={send}
-            disabled={sending || !text.trim()}
-            className="shrink-0 rounded-lg bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-          >
-            Send
-          </button>
-        </div>
+        <ChatComposer
+          placeholder="Message all active volunteers…"
+          inputClassName={spotTextInput}
+          onSendText={sendText}
+          onSendMedia={sendMedia}
+        />
       </div>
     </>
   );

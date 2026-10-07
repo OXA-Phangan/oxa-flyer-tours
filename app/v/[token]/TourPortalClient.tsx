@@ -20,6 +20,9 @@ import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { compressImageFile } from "@/lib/image-compression";
 import { readSeen, writeSeen } from "@/lib/chat-seen";
+import { messagePreview, uploadChatMedia, type ChatMediaType, type PreparedMedia } from "@/lib/chat-media";
+import ChatComposer from "@/components/ChatComposer";
+import ChatMessageBody from "@/components/ChatMessageBody";
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
 
 /* ===================== Types ===================== */
@@ -65,6 +68,8 @@ type ChatMessage = {
   senderRole: "volunteer" | "admin";
   senderName: string;
   text: string;
+  mediaType?: ChatMediaType | null;
+  mediaPath?: string | null;
 };
 
 type SpotStatus = "open" | "completed" | "skipped";
@@ -164,8 +169,6 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [chatOpen, setChatOpen] = useState<"direct" | "group" | null>(null);
   const [directMessages, setDirectMessages] = useState<ChatMessage[] | null>(null);
   const [groupMessages, setGroupMessages] = useState<ChatMessage[] | null>(null);
-  const [chatInput, setChatInput] = useState("");
-  const [chatSending, setChatSending] = useState(false);
   const [directUnread, setDirectUnread] = useState(false);
   const [groupLatest, setGroupLatest] = useState<{ ms: number; mine: boolean } | null>(null);
   const [groupSeenMs, setGroupSeenMs] = useState<number | null>(null);
@@ -531,8 +534,15 @@ export default function TourPortalClient({ token }: { token: string }) {
         (snap) =>
           setDirectMessages(
             snap.docs.map((d) => {
-              const data = d.data() as { senderRole: "volunteer" | "admin"; senderName: string; text: string };
-              return { id: d.id, senderRole: data.senderRole, senderName: data.senderName, text: data.text };
+              const data = d.data() as Omit<ChatMessage, "id">;
+              return {
+                id: d.id,
+                senderRole: data.senderRole,
+                senderName: data.senderName,
+                text: data.text ?? "",
+                mediaType: data.mediaType ?? null,
+                mediaPath: data.mediaPath ?? null,
+              };
             })
           ),
         (err) => console.error("[tour] direct chat listener failed:", err)
@@ -545,8 +555,15 @@ export default function TourPortalClient({ token }: { token: string }) {
         (snap) =>
           setGroupMessages(
             snap.docs.map((d) => {
-              const data = d.data() as { senderRole: "volunteer" | "admin"; senderName: string; text: string };
-              return { id: d.id, senderRole: data.senderRole, senderName: data.senderName, text: data.text };
+              const data = d.data() as Omit<ChatMessage, "id">;
+              return {
+                id: d.id,
+                senderRole: data.senderRole,
+                senderName: data.senderName,
+                text: data.text ?? "",
+                mediaType: data.mediaType ?? null,
+                mediaPath: data.mediaPath ?? null,
+              };
             })
           ),
         (err) => console.error("[tour] group chat listener failed:", err)
@@ -609,41 +626,48 @@ export default function TourPortalClient({ token }: { token: string }) {
 
   const groupUnread = !!groupLatest && !groupLatest.mine && groupSeenMs !== null && groupLatest.ms > groupSeenMs;
 
-  async function sendChatMessage() {
-    const trimmed = chatInput.trim();
-    if (!trimmed || !volunteer) return;
-    setChatSending(true);
-    try {
-      if (chatOpen === "direct") {
-        await addDoc(collection(db, "flyerChatThreads", token, "messages"), {
-          senderRole: "volunteer",
-          senderName: volunteer.name,
-          text: trimmed,
-          createdAt: serverTimestamp(),
-        });
-        // Thread doc may not exist for legacy volunteers — ignore if so,
-        // the message itself still went through.
-        await updateDoc(doc(db, "flyerChatThreads", token), {
-          lastMessage: trimmed,
-          lastMessageAt: serverTimestamp(),
-          lastSenderRole: "volunteer",
-          unreadByAdmin: true,
-          unreadByVolunteer: false,
-        }).catch(() => {});
-      } else if (chatOpen === "group") {
-        await addDoc(collection(db, "flyerGroupMessages"), {
-          senderRole: "volunteer",
-          senderName: volunteer.name,
-          text: trimmed,
-          createdAt: serverTimestamp(),
-        });
-      }
-      setChatInput("");
-    } catch (err) {
-      console.error("[tour] failed to send chat message:", err);
-    } finally {
-      setChatSending(false);
+  // Throws on failure — ChatComposer shows the error.
+  async function postChat(text: string, mediaType: ChatMediaType | null, mediaPath: string | null) {
+    if (!volunteer) return;
+    const preview = messagePreview(text, mediaType);
+    if (chatOpen === "direct") {
+      await addDoc(collection(db, "flyerChatThreads", token, "messages"), {
+        senderRole: "volunteer",
+        senderName: volunteer.name,
+        text,
+        mediaType,
+        mediaPath,
+        createdAt: serverTimestamp(),
+      });
+      // Thread doc may not exist for legacy volunteers — ignore if so,
+      // the message itself still went through.
+      await updateDoc(doc(db, "flyerChatThreads", token), {
+        lastMessage: preview,
+        lastMessageAt: serverTimestamp(),
+        lastSenderRole: "volunteer",
+        unreadByAdmin: true,
+        unreadByVolunteer: false,
+      }).catch(() => {});
+    } else if (chatOpen === "group") {
+      await addDoc(collection(db, "flyerGroupMessages"), {
+        senderRole: "volunteer",
+        senderName: volunteer.name,
+        text,
+        mediaType,
+        mediaPath,
+        createdAt: serverTimestamp(),
+      });
     }
+  }
+
+  async function sendChatText(text: string) {
+    await postChat(text, null, null);
+  }
+
+  async function sendChatMedia(media: PreparedMedia) {
+    const folder = chatOpen === "group" ? `group/${token}` : token;
+    const path = await uploadChatMedia(folder, media);
+    await postChat("", media.type, path);
   }
 
   // ---- Supply reports ----
@@ -1097,31 +1121,14 @@ export default function TourPortalClient({ token }: { token: string }) {
                       {chatOpen === "group" && m.senderRole === "volunteer" && (
                         <div className="mb-0.5 text-xs font-semibold text-white/70">{m.senderName}</div>
                       )}
-                      {m.text}
+                      <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
                     </div>
                   ));
                 })()}
               </div>
 
-              <div className="flex gap-2 p-6 pt-4">
-                <input
-                  type="text"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") sendChatMessage();
-                  }}
-                  placeholder="Type a message…"
-                  className={fieldInput}
-                />
-                <button
-                  type="button"
-                  onClick={sendChatMessage}
-                  disabled={chatSending || !chatInput.trim()}
-                  className="shrink-0 rounded-xl bg-[#201E1B] px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
-                >
-                  Send
-                </button>
+              <div className="p-6 pt-4">
+                <ChatComposer inputClassName={fieldInput} onSendText={sendChatText} onSendMedia={sendChatMedia} />
               </div>
             </div>
           </div>
