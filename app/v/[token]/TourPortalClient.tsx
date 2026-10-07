@@ -1450,7 +1450,7 @@ function ActiveSpotCard({
           Scooter Info
         </div>
       )}
-      <div className="mb-2 inline-block rounded-full bg-[#E9E4D8] px-3 py-1 text-xs font-semibold">{spot.time}</div>
+      <div className="mb-2 inline-block rounded-full bg-[#E9E4D8] px-4 py-1.5 text-base font-normal">{spot.time}</div>
       <h2 className="mb-3 text-lg font-semibold">
         {index + 1}. {spot.name}
       </h2>
@@ -1465,7 +1465,9 @@ function ActiveSpotCard({
         </a>
       )}
       {spot.comment && (
-        <div className="mb-4 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-sm leading-relaxed">{spot.comment}</div>
+        <div className="mb-4 whitespace-pre-line rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-base font-semibold leading-relaxed">
+          {spot.comment}
+        </div>
       )}
 
       {!resolvable && (
