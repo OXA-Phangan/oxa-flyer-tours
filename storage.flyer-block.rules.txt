@@ -41,3 +41,15 @@
                     && request.resource.contentType.matches('(image|video|audio)/.*');
       allow update, delete: if isFlyerAdmin();
     }
+
+    // Bike rental condition photos — path shape: flyerBike/{token}/{file}.jpg
+    // Taken live in the volunteer portal before a rental. Same "token = access,
+    // no browsing" model; create-only, images up to 10 MB. Deleted 7 days after
+    // check-out by cleanupExpiredFlyerBikePhotos.
+    match /flyerBike/{token}/{fileName} {
+      allow get: if true;
+      allow list: if isFlyerAdmin();
+      allow create: if request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+      allow update, delete: if isFlyerAdmin();
+    }

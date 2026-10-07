@@ -25,6 +25,7 @@ import { auth, db, googleProvider, storage } from "@/lib/firebase";
 import { FLYER_MANAGEMENT_EMAILS } from "@/lib/constants";
 import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
+import { BikesTab, VolunteerBikeSection } from "./BikeRentals";
 import { bangkokToday } from "@/lib/shifts";
 import { readSeen, writeSeen } from "@/lib/chat-seen";
 import { messagePreview, uploadChatMedia, type ChatMediaType, type PreparedMedia } from "@/lib/chat-media";
@@ -316,7 +317,7 @@ function AdminLink({ href, className, children }: { href: string; className?: st
   );
 }
 
-const DASHBOARD_TABS = ["crew", "routes", "chat", "supplies"] as const;
+const DASHBOARD_TABS = ["crew", "routes", "chat", "supplies", "bikes"] as const;
 type DashboardTab = (typeof DASHBOARD_TABS)[number];
 const CREW_SUBS = ["registrations", "volunteers", "shifts"] as const;
 type CrewSub = (typeof CREW_SUBS)[number];
@@ -351,6 +352,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
     { key: "routes", label: "Routes", href: adminHref("routes") },
     { key: "chat", label: "Chat", href: adminHref("chat") },
     { key: "supplies", label: "Supplies", href: adminHref("supplies") },
+    { key: "bikes", label: "Bikes", href: adminHref("bikes") },
   ];
   const subs: { key: CrewSub; label: string }[] = [
     { key: "registrations", label: "Registrations" },
@@ -408,6 +410,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
         {tab === "routes" && <RoutesSection />}
         {tab === "chat" && <ChatSection adminEmail={adminEmail} chat={chat} />}
         {tab === "supplies" && <SupplyReportsSection />}
+        {tab === "bikes" && <BikesTab />}
 
         <button type="button" onClick={() => signOut(auth)} className="mt-10 text-sm text-[#5C5850] underline">
           Sign out
@@ -1702,6 +1705,13 @@ function CrewDetail({
           </div>
         </div>
       )}
+
+      <VolunteerBikeSection
+        volunteerId={v.id}
+        volunteerName={v.name}
+        checkOutDate={v.checkOutDate}
+        adminEmail={adminEmail}
+      />
 
       {error && (
         <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">

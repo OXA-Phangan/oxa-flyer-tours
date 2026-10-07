@@ -23,6 +23,8 @@ import { readSeen, writeSeen } from "@/lib/chat-seen";
 import { messagePreview, uploadChatMedia, type ChatMediaType, type PreparedMedia } from "@/lib/chat-media";
 import ChatComposer from "@/components/ChatComposer";
 import ChatMessageBody from "@/components/ChatMessageBody";
+import BikeRental from "@/components/BikeRental";
+import { bikeLabel, parseRental, type BikeRental as BikeRentalDoc } from "@/lib/bike";
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
 
 /* ===================== Types ===================== */
@@ -203,6 +205,8 @@ export default function TourPortalClient({ token }: { token: string }) {
 
   const [toursOpen, setToursOpen] = useState(false);
   const [bikeOpen, setBikeOpen] = useState(false);
+  // Today's (non-cancelled) bike rental, for the line under the "Rent a bike" button.
+  const [todayBike, setTodayBike] = useState<BikeRentalDoc | null>(null);
   // Today's shift the volunteer tapped, awaiting "Start today's tour?" confirmation.
   const [startConfirmId, setStartConfirmId] = useState<string | null>(null);
   const [skipSheetOpen, setSkipSheetOpen] = useState(false);
@@ -288,6 +292,22 @@ export default function TourPortalClient({ token }: { token: string }) {
         console.error("[tour] shifts listener failed:", err);
         setShifts([]);
       }
+    );
+  }, [token, volunteerActive]);
+
+  // ---- Today's bike rental (line under "Rent a bike") ----
+  useEffect(() => {
+    if (!volunteerActive) return;
+    return onSnapshot(
+      collection(db, "flyerVolunteers", token, "bikeRentals"),
+      (snap) => {
+        const today = bangkokToday();
+        const mine = snap.docs
+          .map((d) => parseRental(d.id, d.data()))
+          .find((r) => r.kind === "rental" && r.day === today && r.status !== "cancelled");
+        setTodayBike(mine ?? null);
+      },
+      (err) => console.error("[tour] bike rentals listener failed:", err)
     );
   }, [token, volunteerActive]);
 
@@ -1057,9 +1077,16 @@ export default function TourPortalClient({ token }: { token: string }) {
           <button
             type="button"
             onClick={() => setBikeOpen(true)}
-            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+            className={`relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4] ${
+              todayBike ? "rounded-2xl border-2 border-[#BDB6A2] bg-[#E9E4D6]" : cardClass
+            }`}
           >
             🏍️ Rent a bike
+            {todayBike && (
+              <span className="mt-1 block text-[13px] font-medium text-[#96742A]">
+                Today: {bikeLabel(todayBike.bike)} · {todayBike.status}
+              </span>
+            )}
           </button>
         </div>
 
@@ -1105,22 +1132,13 @@ export default function TourPortalClient({ token }: { token: string }) {
           </div>
         )}
 
-        {bikeOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
-            onClick={() => setBikeOpen(false)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-md rounded-t-2xl bg-white p-6 sm:rounded-2xl"
-            >
-              <h2 className="mb-2 text-lg font-semibold">Rent a bike</h2>
-              <p className="mb-5 text-sm text-[#5C5850]">Coming soon.</p>
-              <button type="button" onClick={() => setBikeOpen(false)} className={primaryButton}>
-                Close
-              </button>
-            </div>
-          </div>
+        {bikeOpen && volunteer && (
+          <BikeRental
+            token={token}
+            volunteerName={volunteer.name}
+            checkOutDate={volunteer.checkOutDate}
+            onClose={() => setBikeOpen(false)}
+          />
         )}
 
         {stayEditOpen && (

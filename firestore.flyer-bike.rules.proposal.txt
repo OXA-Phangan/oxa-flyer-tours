@@ -1,0 +1,57 @@
+    // ---- Bike rentals (Red Bike / Blue Bike) — paste INSIDE the OXA Flyer Tours section ----
+    //
+    // Per-volunteer rentals / extra charges, same "token = access" model as shifts:
+    //   flyerVolunteers/{token}/bikeRentals/{id}
+    // A volunteer may only CREATE a plain "requested" rental for the standard price
+    // (photoPaths 1..8, createdAt == request.time). Everything else is admin-only.
+    // (Put this inside the existing `match /flyerVolunteers/{token} { ... }` block,
+    //  next to `match /shifts/{shiftId}`.)
+    match /bikeRentals/{rentalId} {
+      allow get, list: if true;
+      allow create: if isFlyerAdmin() || (
+        request.resource.data.keys().hasOnly(['kind', 'volunteerId', 'volunteerName', 'day', 'bike', 'status',
+                                              'amount', 'issues', 'note', 'photoPaths', 'createdBy', 'createdAt']) &&
+        request.resource.data.kind == 'rental' &&
+        request.resource.data.volunteerId == token &&
+        request.resource.data.volunteerName is string &&
+        request.resource.data.day is string &&
+        request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        request.resource.data.bike in ['red', 'blue'] &&
+        request.resource.data.status == 'requested' &&
+        request.resource.data.amount == 150 &&
+        request.resource.data.createdBy == 'volunteer' &&
+        request.resource.data.photoPaths is list &&
+        request.resource.data.photoPaths.size() >= 1 &&
+        request.resource.data.photoPaths.size() <= 8 &&
+        request.resource.data.createdAt == request.time
+      );
+      allow update, delete: if isFlyerAdmin();
+    }
+
+    // ---- Outside the flyerVolunteers block (top level of the flyer section) ----
+
+    // One doc per bike per day: flyerBikeSlots/{YYYY-MM-DD}_{red|blue}. Volunteers can
+    // only CREATE it (never overwrite), so a bike can't be requested twice for the same
+    // day — even when two volunteers submit at the same moment. Admin cancels = delete.
+    match /flyerBikeSlots/{slotId} {
+      allow get: if true;
+      allow list: if isFlyerAdmin() || isPortalManagement();
+      allow create: if isFlyerAdmin() || (
+        request.resource.data.keys().hasOnly(['day', 'bike', 'volunteerId', 'status', 'createdAt']) &&
+        request.resource.data.bike in ['red', 'blue'] &&
+        request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        slotId == request.resource.data.day + '_' + request.resource.data.bike &&
+        request.resource.data.volunteerId is string &&
+        exists(/databases/$(database)/documents/flyerVolunteers/$(request.resource.data.volunteerId)) &&
+        request.resource.data.status == 'requested' &&
+        request.resource.data.createdAt == request.time
+      );
+      allow update, delete: if isFlyerAdmin();
+    }
+
+    // Admin "Bikes" tab + employee portal: all rentals across volunteers (read-only for management).
+    // (Top level of the rules file's `match /databases/{database}/documents` — like the existing
+    //  `match /{path=**}/shifts/{shiftId}` rule.)
+    match /{path=**}/bikeRentals/{rentalId} {
+      allow read: if isFlyerAdmin() || isPortalManagement();
+    }

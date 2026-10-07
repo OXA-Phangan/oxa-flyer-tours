@@ -1,0 +1,52 @@
+// =====================================================================
+// OXA Flyer Tours — bike rental photo retention (separate app, same Firebase project)
+// Source: github.com/OXA-Phangan/oxa-flyer-tours (cloud-functions.flyer-bike-photo-cleanup.js.txt)
+//
+// The condition photos a volunteer takes before renting a bike live in Storage:
+//   flyerBike/{volunteerToken}/{file}.jpg
+// They are deleted FLYER_PASSPORT_GRACE_DAYS (7) after the volunteer's check-out —
+// i.e. at flyerVolunteers/{token}.passportDeleteAfter, which already follows stay
+// changes. Files whose volunteer no longer exists: 7 days after upload. Hard cap
+// for everything else: 90 days. The rental docs (flyerVolunteers/{token}/bikeRentals)
+// stay; the admin UI shows "Photos deleted" once the files are gone.
+// Needs the helpers/constants of cloud-functions.flyer-photo-cleanup.js.txt
+// (flyerDeleteFile, FLYER_HOUR_MS, FLYER_PASSPORT_GRACE_DAYS).
+// Runs daily (Admin SDK, bypasses storage.rules). Every deletion is logged.
+// =====================================================================
+exports.cleanupExpiredFlyerBikePhotos = onSchedule(
+  { schedule: "every day 03:40", timeZone: "Asia/Bangkok" },
+  async () => {
+    const db = getFirestore();
+    const bucket = getStorage().bucket();
+    const now = Date.now();
+    const dayMs = 24 * FLYER_HOUR_MS;
+    const volunteerDeadline = new Map(); // token -> ms | null (no volunteer doc)
+
+    const [files] = await bucket.getFiles({ prefix: "flyerBike/" });
+    for (const file of files) {
+      const createdMs = Date.parse(file.metadata && file.metadata.timeCreated);
+      if (!Number.isFinite(createdMs)) continue;
+
+      const parts = file.name.split("/"); // flyerBike/<token>/<file>
+      const token = parts.length >= 3 ? parts[1] : null;
+
+      let deadline = createdMs + FLYER_PASSPORT_GRACE_DAYS * dayMs; // unknown volunteer
+      if (token) {
+        if (!volunteerDeadline.has(token)) {
+          const snap = await db.collection("flyerVolunteers").doc(token).get();
+          let ms = null;
+          if (snap.exists) {
+            const after = snap.get("passportDeleteAfter");
+            ms = after && typeof after.toMillis === "function" ? after.toMillis() : null;
+          }
+          volunteerDeadline.set(token, ms);
+        }
+        const ms = volunteerDeadline.get(token);
+        if (ms !== null) deadline = ms;
+      }
+      deadline = Math.min(deadline, createdMs + 90 * dayMs);
+
+      if (deadline <= now) await flyerDeleteFile(bucket, file.name);
+    }
+  }
+);
