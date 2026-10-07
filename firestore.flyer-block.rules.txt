@@ -21,6 +21,12 @@
       allow read, update, delete: if isFlyerAdmin();
     }
 
+    // Collection-group read of every volunteer's shifts (employee portal
+    // calendar). A per-path rule does NOT cover collectionGroup() queries.
+    match /{path=**}/shifts/{shiftId} {
+      allow read: if isFlyerAdmin() || isPortalManagement();
+    }
+
     match /flyerRoutes/{routeId} {
       allow get, list: if true;
       allow create, update, delete: if isFlyerAdmin();
@@ -28,7 +34,8 @@
 
     match /flyerVolunteers/{token} {
       allow get: if true;
-      allow list: if isFlyerAdmin();
+      // Management (employee portal calendar) may list too — read-only.
+      allow list: if isFlyerAdmin() || isPortalManagement();
       allow create: if isFlyerAdmin();
       allow update: if isFlyerAdmin() || (
         request.resource.data.diff(resource.data).affectedKeys()
@@ -44,18 +51,50 @@
 
     match /flyerTourProgress/{progressId} {
       allow get, write: if true;
-      allow list: if isFlyerAdmin();
+      // Management: employee portal "Volunteers / Flyer Tours" tile (read-only).
+      allow list: if isFlyerAdmin() || isPortalManagement();
+    }
+
+    // Append-only tour event log (tour_start / spot_completed / spot_skipped /
+    // spot_passed / break_start / break_end / tour_finished), written by the
+    // volunteer portal (unauthenticated token link, like every other flyer
+    // write) and read by the employee portal's Flyer Tour timeline. Never
+    // updated or deleted. `at` must be the server timestamp.
+    match /flyerTourEvents/{eventId} {
+      allow create: if request.resource.data.keys().hasOnly(['volunteerId', 'volunteerName', 'day', 'region', 'routeId', 'routeName',
+                                                              'type', 'spotIndex', 'spotName', 'spotType', 'reason', 'proofStoragePath', 'at']) &&
+                    request.resource.data.volunteerId is string &&
+                    exists(/databases/$(database)/documents/flyerVolunteers/$(request.resource.data.volunteerId)) &&
+                    request.resource.data.volunteerName is string &&
+                    request.resource.data.day is string &&
+                    request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+                    request.resource.data.type in ['tour_start', 'spot_completed', 'spot_skipped', 'spot_passed',
+                                                   'break_start', 'break_end', 'tour_finished'] &&
+                    request.resource.data.at == request.time;
+      allow read: if isFlyerAdmin() || isPortalManagement();
+      allow update, delete: if false;
+    }
+
+    // Small admin-side state shared between the flyer admin page and the
+    // employee portal (e.g. groupChat.seenAt for the group-chat unread dot,
+    // which the admin page otherwise only kept in its own localStorage).
+    match /flyerAdminState/{docId} {
+      allow read, write: if isFlyerAdmin() || isPortalManagement();
     }
 
     match /flyerProofs/{proofId} {
       allow create: if request.resource.data.volunteerId is string;
       allow get: if true;
-      allow list, delete: if isFlyerAdmin();
+      // Management may list (timeline proof photos), not delete.
+      allow list: if isFlyerAdmin() || isPortalManagement();
+      allow delete: if isFlyerAdmin();
     }
 
     match /flyerChatThreads/{token} {
       allow get, update: if true;
-      allow list, create: if isFlyerAdmin();
+      // Management may list (Chat button unread dot on the portal tile).
+      allow list: if isFlyerAdmin() || isPortalManagement();
+      allow create: if isFlyerAdmin();
       match /messages/{messageId} {
         allow get, list, create: if true;
       }
