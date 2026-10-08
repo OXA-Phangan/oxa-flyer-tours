@@ -1,0 +1,8 @@
+    // Editable texts of the public registration form (Terms & Conditions, confirmation
+    // message): flyerSettings/registration. Public read (the unauthenticated /register
+    // page needs it), admin-only write. Top level of the Flyer section.
+    match /flyerSettings/{docId} {
+      allow get: if true;
+      allow list: if isFlyerAdmin() || isPortalManagement();
+      allow write: if isFlyerAdmin();
+    }

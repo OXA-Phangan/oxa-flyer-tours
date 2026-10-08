@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { compressImageFile } from "@/lib/image-compression";
 import { generateToken } from "@/lib/token";
+import { DEFAULT_REGISTRATION_SETTINGS, parseRegistrationSettings, type RegistrationSettings } from "@/lib/registration-settings";
 
 type UploadState = "idle" | "uploading" | "done" | "error";
 
@@ -28,6 +29,20 @@ export default function RegisterPage() {
   const [editTimes, setEditTimes] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
+  // Editable in the admin (Registrations → Settings); defaults until loaded / if unreadable.
+  const [settings, setSettings] = useState<RegistrationSettings>(DEFAULT_REGISTRATION_SETTINGS);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDoc(doc(db, "flyerSettings", "registration"))
+      .then((snap) => {
+        if (!cancelled && snap.exists()) setSettings(parseRegistrationSettings(snap.data()));
+      })
+      .catch((err) => console.error("[register] settings load failed (using defaults):", err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [passportPhotoPath, setPassportPhotoPath] = useState<string | null>(null);
@@ -178,9 +193,8 @@ export default function RegisterPage() {
         <div className="w-full max-w-md rounded-2xl border border-[#E2DFD6] bg-white p-6 text-center text-[#201E1B]">
           <div className="mb-3 text-4xl">🎉</div>
           <h1 className="mb-3 text-2xl font-semibold">Thanks, {submittedName}!</h1>
-          <p className="text-base leading-relaxed text-[#5C5850]">
-            Your registration is being reviewed by the OXA team. You&apos;ll receive your personal Flyer Tours link
-            via WhatsApp once it&apos;s approved.
+          <p className="whitespace-pre-line text-base leading-relaxed text-[#5C5850]">
+            {settings.confirmationMessage.replace(/\{name\}/g, submittedName)}
           </p>
         </div>
       </main>
@@ -493,10 +507,7 @@ export default function RegisterPage() {
             <h2 id="terms-title" className="mb-3 text-lg font-semibold">
               Volunteer Terms &amp; Conditions
             </h2>
-            <p className="mb-6 text-base leading-relaxed text-[#5C5850]">
-              Placeholder text — replace with your actual terms. Typically covers: volunteer expectations, the ฿1,000
-              deposit and its refund conditions, conduct while flyering, and liability while using a rented scooter.
-            </p>
+            <p className="mb-6 whitespace-pre-line text-base leading-relaxed text-[#5C5850]">{settings.termsText}</p>
             <button
               type="button"
               onClick={() => setTermsOpen(false)}

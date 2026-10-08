@@ -25,6 +25,7 @@ import { auth, db, googleProvider, storage } from "@/lib/firebase";
 import { FLYER_MANAGEMENT_EMAILS } from "@/lib/constants";
 import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
+import RegistrationSettingsPanel from "./RegistrationSettings";
 import { BikesTab, VolunteerBikeSection } from "./BikeRentals";
 import { bangkokToday } from "@/lib/shifts";
 import { readSeen, writeSeen } from "@/lib/chat-seen";
@@ -488,6 +489,7 @@ function RegistrationsSection({ adminEmail }: { adminEmail: string }) {
   const [registrations, setRegistrations] = useState<Registration[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [approvedLink, setApprovedLink] = useState<{ name: string; url: string } | null>(null);
 
   useEffect(() => {
@@ -528,9 +530,22 @@ function RegistrationsSection({ adminEmail }: { adminEmail: string }) {
     );
   }
 
+  if (settingsOpen) {
+    return <RegistrationSettingsPanel adminEmail={adminEmail} onBack={() => setSettingsOpen(false)} />;
+  }
+
   return (
     <>
-      <p className="mb-4 text-sm text-[#5C5850]">Pending review</p>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="text-sm text-[#5C5850]">Pending review</p>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="rounded-xl border border-[#D6D1C3] bg-white px-3 py-2 text-sm font-semibold"
+        >
+          ⚙️ Settings
+        </button>
+      </div>
 
       {listError && (
         <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
