@@ -23,7 +23,7 @@ import {
 } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { auth, db, googleProvider, storage } from "@/lib/firebase";
-import { FLYER_MANAGEMENT_EMAILS } from "@/lib/constants";
+import { FLYER_MANAGEMENT_EMAILS, MANAGEMENT_DASHBOARD_URL } from "@/lib/constants";
 import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
 import RegistrationSettingsPanel from "./RegistrationSettings";
@@ -405,6 +405,9 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
 
   return (
     <Shell wide={tab === "crew" && sub === "shifts"}>
+      <a href={MANAGEMENT_DASHBOARD_URL} className="mb-2 inline-block text-sm text-[#5C5850] underline">
+        ← Back to dashboard
+      </a>
       <div className="sticky top-0 z-30 -mx-4 mb-4 bg-[#EFEDE7]/95 px-4 pb-3 pt-1 backdrop-blur">
         <nav aria-label="Sections" className="grid max-w-md grid-cols-4 gap-1 rounded-full bg-[#E2DFD6] p-1">
           {tabs.map((t) => (

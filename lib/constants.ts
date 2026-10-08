@@ -7,3 +7,6 @@ export const FLYER_MANAGEMENT_EMAILS = [
   "bella.oxaphangan@gmail.com",
   "mobit.booking@gmail.com",
 ];
+
+// Management dashboard of the OXA employee portal (the "Back to dashboard" link in /admin goes here).
+export const MANAGEMENT_DASHBOARD_URL = "https://oxa-employee-portal.vercel.app/management";
