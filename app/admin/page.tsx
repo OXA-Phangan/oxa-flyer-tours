@@ -1897,7 +1897,7 @@ function ChatPanel({ token, volunteerName, adminEmail }: { token: string; volunt
           <div
             key={m.id}
             className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
-              m.senderRole === "admin" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+              m.senderRole === "admin" ? "ml-auto bg-[#201E1B]/15 text-[#201E1B]" : "bg-[#FBF9F4] text-[#201E1B]"
             }`}
           >
             <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
@@ -2227,7 +2227,7 @@ function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: 
             <div
               key={m.id}
               className={`group max-w-[85%] rounded-xl px-3 py-2 text-sm ${
-                m.senderRole === "admin" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+                m.senderRole === "admin" ? "ml-auto bg-[#201E1B]/15 text-[#201E1B]" : "bg-[#FBF9F4] text-[#201E1B]"
               }`}
             >
               {m.senderRole !== "admin" && (
@@ -2241,7 +2241,7 @@ function GroupChatSection({ adminEmail, onSeen }: { adminEmail: string; onSeen: 
                   type="button"
                   onClick={() => removeMessage(m.id)}
                   className={`shrink-0 text-xs underline ${
-                    m.senderRole === "admin" ? "text-white/70" : "text-[#8A857A]"
+                    m.senderRole === "admin" ? "text-[#5C5850]" : "text-[#8A857A]"
                   }`}
                 >
                   {confirmDeleteId === m.id ? "Confirm?" : "Delete"}

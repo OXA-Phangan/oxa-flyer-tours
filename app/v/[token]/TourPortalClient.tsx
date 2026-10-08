@@ -841,14 +841,14 @@ export default function TourPortalClient({ token }: { token: string }) {
                     <div
                       key={m.id}
                       className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
-                        m.senderRole === "volunteer" ? "ml-auto bg-[#201E1B] text-white" : "bg-[#FBF9F4] text-[#201E1B]"
+                        m.senderRole === "volunteer" ? "ml-auto bg-[#201E1B]/15 text-[#201E1B]" : "bg-[#FBF9F4] text-[#201E1B]"
                       }`}
                     >
                       {chatOpen === "group" && m.senderRole !== "volunteer" && (
                         <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">OXA Team</div>
                       )}
                       {chatOpen === "group" && m.senderRole === "volunteer" && (
-                        <div className="mb-0.5 text-xs font-semibold text-white/70">{m.senderName}</div>
+                        <div className="mb-0.5 text-xs font-semibold text-[#5C5850]">{m.senderName}</div>
                       )}
                       <ChatMessageBody text={m.text} mediaType={m.mediaType} mediaPath={m.mediaPath} />
                     </div>
