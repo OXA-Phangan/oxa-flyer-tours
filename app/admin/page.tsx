@@ -144,7 +144,7 @@ function blankSpot(): RouteSpot {
 
 const cardClass = "rounded-2xl border border-[#E2DFD6] bg-white";
 const primaryButton =
-  "w-full rounded-2xl bg-[#201E1B] px-4 py-4 text-base font-semibold text-white disabled:opacity-40";
+  "w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 const secondaryButton =
   "w-full rounded-2xl border border-[#E2DFD6] bg-white px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 
@@ -404,7 +404,7 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
               href={crewHref(t.key)}
               className={`rounded-full px-4 py-2 text-sm font-semibold ${
                 sub === t.key
-                  ? "bg-[#201E1B] text-white"
+                  ? "border border-[#BDB6A2] bg-[#E9E4D6] text-[#201E1B]"
                   : "border border-[#E2DFD6] bg-white text-[#5C5850]"
               }`}
             >
@@ -934,7 +934,7 @@ function RoutesSection() {
         <p className="text-sm text-[#5C5850]">Flyering tours, grouped by region</p>
         <AdminLink
           href={adminHref("routes", "new")}
-          className="shrink-0 rounded-full bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white"
+          className="shrink-0 rounded-full border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-2 text-sm font-semibold text-[#201E1B]"
         >
           + New Route
         </AdminLink>
@@ -1264,7 +1264,7 @@ function RouteEditor({
                   onClick={() => updateSpot(i, { type: t })}
                   className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold ${
                     sp.type === t
-                      ? "border-[#201E1B] bg-[#201E1B] text-white"
+                      ? "border-[#BDB6A2] bg-[#E9E4D6] text-[#201E1B]"
                       : "border-[#E2DFD6] bg-white text-[#5C5850]"
                   }`}
                 >
@@ -1740,7 +1740,7 @@ function CrewDetail({
               type="button"
               onClick={approveStayEdit}
               disabled={busy !== null}
-              className="w-full rounded-xl bg-[#201E1B] px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
+              className="w-full rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-3 text-sm font-semibold text-[#201E1B] disabled:opacity-40"
             >
               {busy === "approve" ? "Approving…" : "Approve change"}
             </button>

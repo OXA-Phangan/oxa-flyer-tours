@@ -15,6 +15,7 @@ import {
   setDoc,
   Timestamp,
   updateDoc,
+  where,
 } from "firebase/firestore";
 import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
@@ -91,7 +92,7 @@ const SKIP_REASONS = ["I don't have enough time", "The spot is closed", "Other r
 
 const cardClass = "rounded-2xl border border-[#E2DFD6] bg-white";
 const primaryButton =
-  "w-full rounded-2xl bg-[#201E1B] px-4 py-4 text-base font-semibold text-white disabled:opacity-40";
+  "w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 const secondaryButton =
   "w-full rounded-2xl border border-[#E2DFD6] bg-white px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 const fieldInput =
@@ -283,6 +284,12 @@ export default function TourPortalClient({ token }: { token: string }) {
 
   // ---- My shifts (planned by the admin; read-only here) ----
   const volunteerActive = volunteer?.status === "active";
+  // The group chat only shows messages from the volunteer's check-in day (Bangkok midnight) on,
+  // so new arrivals don't see what earlier groups wrote.
+  const groupSinceMs = useMemo(() => {
+    const ms = volunteer?.checkInDate ? Date.parse(`${volunteer.checkInDate}T00:00:00+07:00`) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  }, [volunteer?.checkInDate]);
   useEffect(() => {
     if (!volunteerActive) return;
     return onSnapshot(
@@ -644,7 +651,12 @@ export default function TourPortalClient({ token }: { token: string }) {
       );
     }
     if (chatOpen === "group") {
-      const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "asc"));
+      if (groupSinceMs === null) return;
+      const q = query(
+        collection(db, "flyerGroupMessages"),
+        where("createdAt", ">=", Timestamp.fromMillis(groupSinceMs)),
+        orderBy("createdAt", "asc")
+      );
       return onSnapshot(
         q,
         (snap) =>
@@ -664,7 +676,7 @@ export default function TourPortalClient({ token }: { token: string }) {
         (err) => console.error("[tour] group chat listener failed:", err)
       );
     }
-  }, [chatOpen, token]);
+  }, [chatOpen, token, groupSinceMs]);
 
   // ---- Unread markers (green dots on the chat buttons) ----
   const volunteerName = volunteer?.name ?? "";
@@ -687,8 +699,13 @@ export default function TourPortalClient({ token }: { token: string }) {
   }, [chatOpen, directUnread, token]);
 
   useEffect(() => {
-    if (!volunteerActive) return;
-    const q = query(collection(db, "flyerGroupMessages"), orderBy("createdAt", "desc"), limit(1));
+    if (!volunteerActive || groupSinceMs === null) return;
+    const q = query(
+      collection(db, "flyerGroupMessages"),
+      where("createdAt", ">=", Timestamp.fromMillis(groupSinceMs)),
+      orderBy("createdAt", "desc"),
+      limit(1)
+    );
     return onSnapshot(
       q,
       (snap) => {
@@ -705,7 +722,7 @@ export default function TourPortalClient({ token }: { token: string }) {
       },
       () => {}
     );
-  }, [token, volunteerActive, volunteerName]);
+  }, [token, volunteerActive, volunteerName, groupSinceMs]);
 
   useEffect(() => {
     setGroupSeenMs(readSeen(groupSeenKey));
@@ -1340,7 +1357,7 @@ export default function TourPortalClient({ token }: { token: string }) {
         <div className="mx-auto w-full max-w-md flex-1 px-4 pb-28 pt-8">
           <div className="mb-4 flex items-center justify-between">
             <h1 className="text-xl font-semibold">Flyer Tours</h1>
-            <button type="button" onClick={backToPicker} className="rounded-full bg-[#201E1B] px-4 py-2 text-sm font-semibold text-white">
+            <button type="button" onClick={backToPicker} className="rounded-full border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-2 text-sm font-semibold text-[#201E1B]">
               Back
             </button>
           </div>
@@ -1411,7 +1428,7 @@ export default function TourPortalClient({ token }: { token: string }) {
               onClick={togglePause}
               className={
                 volunteer?.onBreak
-                  ? "flex-1 rounded-2xl bg-[#201E1B] px-4 py-3 text-base font-semibold text-white"
+                  ? "flex-1 rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-3 text-base font-semibold text-[#201E1B]"
                   : "flex-1 rounded-2xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold text-[#201E1B]"
               }
             >
@@ -1590,7 +1607,7 @@ function ActiveSpotCard({
 
       {/* Photo and skip advance on their own; break / info spots have neither, so they need this. */}
       {resolvable && (
-        <button type="button" onClick={onNext} className="w-full rounded-xl bg-[#201E1B] px-4 py-4 text-base font-semibold text-white">
+        <button type="button" onClick={onNext} className="w-full rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-base font-semibold text-[#201E1B]">
           {isLast ? "Finish Route" : "Next →"}
         </button>
       )}

@@ -58,7 +58,7 @@ const fieldInput =
   "block w-full min-w-0 appearance-none rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-base text-[#201E1B] min-h-[50px] focus:border-[#201E1B] focus:outline-none disabled:bg-[#FBF9F4] disabled:text-[#5C5850]";
 const fieldLabel = "mb-1.5 block text-sm font-medium text-[#201E1B]";
 const primaryButton =
-  "rounded-2xl bg-[#201E1B] px-5 py-3 text-base font-semibold text-white disabled:opacity-40";
+  "rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-5 py-3 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 const secondaryButton =
   "rounded-2xl border border-[#E2DFD6] bg-white px-5 py-3 text-base font-semibold text-[#201E1B] disabled:opacity-40";
 
@@ -346,7 +346,7 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
           type="button"
           onClick={() => openNew()}
           disabled={visible.length === 0}
-          className="h-11 rounded-xl bg-[#201E1B] px-5 text-sm font-semibold text-white disabled:opacity-40"
+          className="h-11 rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-5 text-sm font-semibold text-[#201E1B] disabled:opacity-40"
         >
           + Add shift
         </button>
@@ -570,7 +570,7 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
                             }
                             className={`h-11 rounded-xl border px-3 text-sm ${
                               on
-                                ? "border-[#201E1B] bg-[#201E1B] font-semibold text-white"
+                                ? "border-[#BDB6A2] bg-[#E9E4D6] font-semibold text-[#201E1B]"
                                 : "border-[#E2DFD6] bg-white text-[#201E1B]"
                             }`}
                           >
@@ -601,7 +601,7 @@ export default function ShiftPlan({ adminEmail }: { adminEmail: string }) {
                             }
                             className={`h-11 min-w-[56px] rounded-xl border px-3 text-sm ${
                               on
-                                ? "border-[#201E1B] bg-[#201E1B] font-semibold text-white"
+                                ? "border-[#BDB6A2] bg-[#E9E4D6] font-semibold text-[#201E1B]"
                                 : "border-[#E2DFD6] bg-white text-[#201E1B]"
                             }`}
                           >

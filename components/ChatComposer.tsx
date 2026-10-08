@@ -184,7 +184,7 @@ export default function ChatComposer({
           <button
             type="button"
             onClick={() => stopRecording(false)}
-            className="h-11 rounded-xl bg-[#201E1B] px-4 text-sm font-semibold text-white"
+            className="h-11 rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 text-sm font-semibold text-[#201E1B]"
           >
             Send
           </button>
@@ -225,7 +225,7 @@ export default function ChatComposer({
               type="button"
               onClick={sendText}
               disabled={busy || !text.trim()}
-              className="h-11 shrink-0 rounded-xl bg-[#201E1B] px-4 text-sm font-semibold text-white disabled:opacity-40"
+              className="h-11 shrink-0 rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 text-sm font-semibold text-[#201E1B] disabled:opacity-40"
             >
               Send
             </button>

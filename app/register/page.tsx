@@ -486,7 +486,7 @@ export default function RegisterPage() {
           <button
             type="submit"
             disabled={!canSubmit}
-            className="w-full rounded-2xl bg-[#201E1B] px-4 py-4 text-base font-semibold text-white disabled:opacity-40"
+            className="w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-base font-semibold text-[#201E1B] disabled:opacity-40"
           >
             {submitting ? "Submitting…" : "Submit registration"}
           </button>
@@ -512,7 +512,7 @@ export default function RegisterPage() {
             <button
               type="button"
               onClick={() => setTermsOpen(false)}
-              className="w-full rounded-2xl bg-[#201E1B] px-4 py-3 text-base font-semibold text-white"
+              className="w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-3 text-base font-semibold text-[#201E1B]"
             >
               Close
             </button>
