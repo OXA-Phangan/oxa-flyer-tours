@@ -338,7 +338,7 @@ function crewHref(sub: CrewSub): string {
 }
 
 function Dashboard({ adminEmail }: { adminEmail: string }) {
-  const { tab: urlTab, sub: urlSub } = useAdminLocation();
+  const { tab: urlTab, sub: urlSub, route: urlRoute } = useAdminLocation();
   const chat = useAdminChat(adminEmail);
   const chatUnread = chat.groupUnread || Object.values<ChatThreadDoc>(chat.threads).some((t) => t.unreadByAdmin === true);
 
@@ -428,7 +428,8 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
         </button>
       </div>
 
-      <ShareRegistrationFooter />
+      {/* The route editor has its own sticky Save bar at the bottom. */}
+      {!(tab === "routes" && urlRoute) && <ShareRegistrationFooter />}
     </Shell>
   );
 }
@@ -1142,11 +1143,16 @@ function RouteEditor({
     }
   }
 
+  const headerTitle = [region.trim(), name.trim()].filter(Boolean).join(" · ") || (route ? "Route" : "New route");
+
   return (
     <>
-      <button type="button" onClick={onBack} className="mb-4 text-sm text-[#5C5850] underline">
-        ← Back to routes
-      </button>
+      <div className="sticky top-0 z-20 -mx-4 mb-4 border-b border-[#E2DFD6] bg-[#EFEDE7]/95 px-4 py-3 backdrop-blur">
+        <button type="button" onClick={onBack} className="text-sm text-[#5C5850] underline">
+          ← Back to routes
+        </button>
+        <p className="mt-0.5 truncate text-base font-semibold">{headerTitle}</p>
+      </div>
 
       <div className={`${cardClass} mb-5 space-y-4 p-4`}>
         <div>
@@ -1320,16 +1326,20 @@ function RouteEditor({
         />
       </div>
 
-      {error && (
-        <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-          {error}
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E2DFD6] bg-[#EFEDE7]/95 px-4 py-3 backdrop-blur">
+        <div className="mx-auto max-w-md">
+          {error && (
+            <div role="alert" className="mb-2 rounded-xl border border-red-300 bg-red-50 p-2.5 text-sm text-red-800">
+              {error}
+            </div>
+          )}
+          <button type="button" onClick={save} disabled={saving} className={primaryButton}>
+            {saving ? "Saving…" : route ? "Save Changes" : "Create Route"}
+          </button>
         </div>
-      )}
+      </div>
 
       <div className="space-y-3">
-        <button type="button" onClick={save} disabled={saving} className={primaryButton}>
-          {saving ? "Saving…" : route ? "Save Changes" : "Create Route"}
-        </button>
         {route && (
           <button type="button" onClick={duplicate} disabled={saving} className={secondaryButton}>
             Duplicate as New Route
