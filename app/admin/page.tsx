@@ -5,6 +5,7 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebas
 import {
   addDoc,
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
@@ -337,10 +338,41 @@ function crewHref(sub: CrewSub): string {
   return `/admin?tab=crew&sub=${sub}`;
 }
 
+/**
+ * Green dots on the Supplies / Bikes tabs: shown while there is at least one open
+ * supply report or one bike request waiting for a decision — they disappear by
+ * themselves once everything is resolved / confirmed / cancelled.
+ */
+function useAdminAttention() {
+  const [suppliesOpen, setSuppliesOpen] = useState(false);
+  const [bikesPending, setBikesPending] = useState(false);
+
+  useEffect(() => {
+    return onSnapshot(
+      query(collection(db, "flyerSupplyReports"), where("status", "==", "open")),
+      (snap) => setSuppliesOpen(!snap.empty),
+      (err) => console.error("[admin] open supply reports listener failed:", err),
+    );
+  }, []);
+
+  useEffect(() => {
+    // Whole collection group (single-field collection-group filters would need an extra index);
+    // the Bikes tab reads the same data.
+    return onSnapshot(
+      collectionGroup(db, "bikeRentals"),
+      (snap) => setBikesPending(snap.docs.some((d) => d.data().status === "requested")),
+      (err) => console.error("[admin] pending bike requests listener failed:", err),
+    );
+  }, []);
+
+  return { suppliesOpen, bikesPending };
+}
+
 function Dashboard({ adminEmail }: { adminEmail: string }) {
   const { tab: urlTab, sub: urlSub, route: urlRoute } = useAdminLocation();
   const chat = useAdminChat(adminEmail);
   const chatUnread = chat.groupUnread || Object.values<ChatThreadDoc>(chat.threads).some((t) => t.unreadByAdmin === true);
+  const { suppliesOpen, bikesPending } = useAdminAttention();
 
   // Old bookmarks: ?tab=registrations / ?tab=shifts / ?tab=group-chat now live elsewhere.
   let tab: DashboardTab = "crew";
@@ -383,7 +415,9 @@ function Dashboard({ adminEmail }: { adminEmail: string }) {
                 tab === t.key ? "bg-white text-[#201E1B]" : "text-[#5C5850]"
               }`}
             >
-              {t.key === "chat" && chatUnread && (
+              {((t.key === "chat" && chatUnread) ||
+                (t.key === "supplies" && suppliesOpen) ||
+                (t.key === "bikes" && bikesPending)) && (
                 <span
                   role="img"
                   aria-label="New messages"
