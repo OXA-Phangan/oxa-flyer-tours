@@ -594,12 +594,14 @@ function StoragePhoto({
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // Collapsed by default: ID photos are only loaded when someone actually opens them.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setUrl(null);
     setFailed(false);
-    if (!path) return;
+    if (!path || !open) return;
     getDownloadURL(ref(storage, path))
       .then((u) => !cancelled && setUrl(u))
       .catch((err) => {
@@ -609,7 +611,7 @@ function StoragePhoto({
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, open]);
 
   async function download() {
     if (!path || !url) return;
@@ -634,20 +636,29 @@ function StoragePhoto({
 
   return (
     <div className={`${cardClass} mb-5 overflow-hidden`}>
-      <p className="px-4 pt-3 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{label}</p>
-      {url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt={label} className="mt-2 block w-full" />
-      ) : (
-        <div className="mt-2 flex h-40 items-center justify-center bg-[#FBF9F4] px-4 text-center text-sm text-[#8A857A]">
-          {!path
-            ? "No photo on file (it may have been deleted after the retention period)."
-            : failed
-              ? "Photo could not be loaded."
-              : "Loading photo…"}
-        </div>
-      )}
-      {url && (
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex min-h-[48px] w-full items-center justify-between px-4 py-3 text-left"
+      >
+        <span className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{label}</span>
+        <span className="text-sm text-[#5C5850]">{open ? "Hide ▴" : "Show ▾"}</span>
+      </button>
+      {open &&
+        (url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={url} alt={label} className="block w-full" />
+        ) : (
+          <div className="flex h-40 items-center justify-center bg-[#FBF9F4] px-4 text-center text-sm text-[#8A857A]">
+            {!path
+              ? "No photo on file (it may have been deleted after the retention period)."
+              : failed
+                ? "Photo could not be loaded."
+                : "Loading photo…"}
+          </div>
+        ))}
+      {open && url && (
         <div className="p-3">
           <button type="button" onClick={download} disabled={downloading} className={secondaryButton}>
             {downloading ? "Preparing…" : "Download JPG"}
