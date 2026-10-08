@@ -39,6 +39,9 @@ type Registration = {
   checkInTime: string | null;
   checkOutDate: string;
   checkOutTime: string | null;
+  // `name` is the first name (display name everywhere); legacy registrations hold the full name in `name`.
+  familyName?: string | null;
+  whatsapp?: string | null;
   // null once the retention job (Cloud Function cleanupExpiredFlyerPassports) has deleted the photo.
   passportPhotoPath: string | null;
   // Selfie taken at registration; absent on registrations from before it existed.
@@ -78,7 +81,9 @@ type PendingStayEdit = {
 
 type FlyerVolunteerDoc = {
   id: string; // token
-  name: string;
+  name: string; // first name (display name)
+  familyName?: string | null;
+  whatsapp?: string | null;
   checkInDate: string;
   checkInTime: string | null;
   checkOutDate: string;
@@ -172,6 +177,11 @@ function timeAgo(ts: Timestamp | null): string {
 }
 
 /** 7 days after the check-out date, at local midnight. */
+/** Full name for the detail views only; everywhere else the first name (`name`) is shown. */
+function fullName(p: { name: string; familyName?: string | null }): string {
+  return p.familyName ? `${p.name} ${p.familyName}` : p.name;
+}
+
 function passportDeleteAfter(checkOutDate: string): Timestamp {
   const [y, m, d] = checkOutDate.split("-").map(Number);
   return Timestamp.fromDate(new Date(y, m - 1, d + 7));
@@ -658,6 +668,8 @@ function RegistrationDetail({
       const batch = writeBatch(db);
       batch.set(doc(db, "flyerVolunteers", token), {
         name: r.name,
+        familyName: r.familyName ?? null,
+        whatsapp: r.whatsapp ?? null,
         checkInDate: r.checkInDate,
         checkInTime: r.checkInTime ?? null,
         checkOutDate: r.checkOutDate,
@@ -726,13 +738,14 @@ function RegistrationDetail({
         ← Back to list
       </button>
 
-      <StoragePhoto path={r.passportPhotoPath} label="Passport" fileName={`passport-${r.name}.jpg`} />
+      <StoragePhoto path={r.passportPhotoPath} label="Passport" fileName={`passport-${fullName(r)}.jpg`} />
       {r.selfiePhotoPath && (
-        <StoragePhoto path={r.selfiePhotoPath} label="Selfie" fileName={`selfie-${r.name}.jpg`} />
+        <StoragePhoto path={r.selfiePhotoPath} label="Selfie" fileName={`selfie-${fullName(r)}.jpg`} />
       )}
 
       <div className={`${cardClass} mb-5 divide-y divide-[#E2DFD6]`}>
-        <Row label="Name" value={r.name} />
+        <Row label="Name" value={fullName(r)} />
+        <Row label="WhatsApp" value={r.whatsapp || "—"} />
         <Row label="Check-in" value={formatDateTime(r.checkInDate, r.checkInTime)} />
         <Row label="Check-out" value={formatDateTime(r.checkOutDate, r.checkOutTime)} />
         <Row label="Deposit acknowledged" value={r.depositAcknowledged ? "✓ Yes" : "✗ No"} />
@@ -1582,16 +1595,17 @@ function CrewDetail({
       </button>
 
       <div className={`${cardClass} mb-5 divide-y divide-[#E2DFD6]`}>
-        <Row label="Name" value={v.name} />
+        <Row label="Name" value={fullName(v)} />
+        <Row label="WhatsApp" value={v.whatsapp || "—"} />
         <Row label="Status" value={v.status === "active" ? "Active" : "Departed"} />
         <Row label="Check-in" value={formatDateTime(v.checkInDate, v.checkInTime)} />
         <Row label="Check-out" value={formatDateTime(v.checkOutDate, v.checkOutTime)} />
         <Row label="On break" value={v.onBreak ? "✓ Yes" : "✗ No"} />
       </div>
 
-      <StoragePhoto path={v.passportPhotoPath} label="Passport" fileName={`passport-${v.name}.jpg`} />
+      <StoragePhoto path={v.passportPhotoPath} label="Passport" fileName={`passport-${fullName(v)}.jpg`} />
       {v.selfiePhotoPath && (
-        <StoragePhoto path={v.selfiePhotoPath} label="Selfie" fileName={`selfie-${v.name}.jpg`} />
+        <StoragePhoto path={v.selfiePhotoPath} label="Selfie" fileName={`selfie-${fullName(v)}.jpg`} />
       )}
 
       <div className={`${cardClass} mb-5 p-4`}>

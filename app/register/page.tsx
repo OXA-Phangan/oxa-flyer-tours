@@ -18,7 +18,9 @@ const DEFAULT_CHECK_IN_TIME = "14:00";
 const DEFAULT_CHECK_OUT_TIME = "10:00";
 
 export default function RegisterPage() {
-  const [name, setName] = useState("");
+  const [givenName, setGivenName] = useState("");
+  const [familyName, setFamilyName] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
   const [checkInDate, setCheckInDate] = useState("");
   const [checkInTime, setCheckInTime] = useState(DEFAULT_CHECK_IN_TIME);
   const [checkOutDate, setCheckOutDate] = useState("");
@@ -60,8 +62,13 @@ export default function RegisterPage() {
 
   const datesInvalid = checkInDate !== "" && checkOutDate !== "" && checkOutDate < checkInDate;
 
+  // WhatsApp number incl. country code; just a sanity check (7+ digits), not a format police.
+  const whatsappValid = whatsapp.replace(/\D/g, "").length >= 7;
+
   const canSubmit =
-    name.trim() !== "" &&
+    givenName.trim() !== "" &&
+    familyName.trim() !== "" &&
+    whatsappValid &&
     checkInDate !== "" &&
     checkOutDate !== "" &&
     !datesInvalid &&
@@ -131,11 +138,16 @@ export default function RegisterPage() {
 
     setSubmitting(true);
     setError(null);
-    const trimmedName = name.trim();
+    const trimmedGiven = givenName.trim();
+    const trimmedFamily = familyName.trim();
 
     try {
       await addDoc(collection(db, "flyerRegistrations"), {
-        name: trimmedName,
+        // `name` is the display name used everywhere in the apps: first name only.
+        name: trimmedGiven,
+        givenName: trimmedGiven,
+        familyName: trimmedFamily,
+        whatsapp: whatsapp.trim(),
         checkInDate,
         checkInTime: checkInTime || null,
         checkOutDate,
@@ -151,7 +163,7 @@ export default function RegisterPage() {
         reviewedAt: null,
         reviewedBy: null,
       });
-      setSubmittedName(trimmedName);
+      setSubmittedName(trimmedGiven);
     } catch (err) {
       console.error("[register] registration write failed:", err);
       setError("Something went wrong while submitting your registration. Please try again — your details are still filled in.");
@@ -184,16 +196,31 @@ export default function RegisterPage() {
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-4 rounded-2xl border border-[#E2DFD6] bg-white p-4">
             <div>
-              <label htmlFor="name" className={labelClass}>
-                Full name
+              <label htmlFor="givenName" className={labelClass}>
+                Given name
               </label>
               <input
-                id="name"
+                id="givenName"
                 type="text"
-                autoComplete="name"
+                autoComplete="given-name"
                 required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={givenName}
+                onChange={(e) => setGivenName(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label htmlFor="familyName" className={labelClass}>
+                Family name
+              </label>
+              <input
+                id="familyName"
+                type="text"
+                autoComplete="family-name"
+                required
+                value={familyName}
+                onChange={(e) => setFamilyName(e.target.value)}
                 className={inputClass}
               />
             </div>
@@ -288,6 +315,24 @@ export default function RegisterPage() {
                 </button>
               </div>
             )}
+
+            <div>
+              <label htmlFor="whatsapp" className={labelClass}>
+                WhatsApp number
+              </label>
+              <input
+                id="whatsapp"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                required
+                placeholder="+49 151 2345678"
+                value={whatsapp}
+                onChange={(e) => setWhatsapp(e.target.value)}
+                className={inputClass}
+              />
+              <p className="mt-1 text-sm text-[#8A857A]">Please include your country code. We use it to reach you during your stay.</p>
+            </div>
           </div>
 
           <div className="rounded-2xl border border-[#E2DFD6] bg-white p-4">
