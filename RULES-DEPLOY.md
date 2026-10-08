@@ -12,9 +12,9 @@ The flyer-app parts live as paste-in blocks here:
 
 ## Bike rentals (Red / Blue Bike)
 
-- Firestore: proposal in `firestore.flyer-bike.rules.proposal.txt` (bikeRentals subcollection, `flyerBikeSlots`, collection-group read). It goes into `oxa-ticket-app/firestore.rules` (written in the other chat) — only copy it into `firestore.flyer-block.rules.txt` once it is deployed there.
+- Firestore: bikeRentals subcollection, `flyerBikeSlots` and the collection-group read are deployed in `oxa-ticket-app/firestore.rules` (commit d290fb4) and mirrored in `firestore.flyer-block.rules.txt`.
 - Storage: `flyerBike/{token}/{file}` rule is in `storage.flyer-block.rules.txt`; apply + deploy with `scripts/apply-flyer-bike-photos.ps1` (run inside `oxa-poster-tour`), which also appends the cleanup function `cloud-functions.flyer-bike-photo-cleanup.js.txt` (`cleanupExpiredFlyerBikePhotos`, daily 03:40 Bangkok).
 
 ## Registration settings (editable Terms & Conditions + confirmation message)
 
-- Firestore: proposal in `firestore.flyer-settings.rules.proposal.txt` (`flyerSettings/{docId}`: public get, admin write). Goes into `oxa-ticket-app/firestore.rules`; copy into `firestore.flyer-block.rules.txt` only once deployed there. Until then /register shows the built-in default texts and saving in the admin fails.
+- Firestore: `flyerSettings/{docId}` (public get, admin write) is deployed in `oxa-ticket-app/firestore.rules` (commit d290fb4) and mirrored in `firestore.flyer-block.rules.txt`.
