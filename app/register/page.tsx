@@ -6,6 +6,7 @@ import { ref, uploadBytes } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { compressImageFile } from "@/lib/image-compression";
 import { generateToken } from "@/lib/token";
+import LinkedText from "@/components/LinkedText";
 import { DEFAULT_REGISTRATION_SETTINGS, parseRegistrationSettings, type RegistrationSettings } from "@/lib/registration-settings";
 
 type UploadState = "idle" | "uploading" | "done" | "error";
@@ -194,7 +195,7 @@ export default function RegisterPage() {
           <div className="mb-3 text-4xl">🎉</div>
           <h1 className="mb-3 text-2xl font-semibold">Thanks, {submittedName}!</h1>
           <p className="whitespace-pre-line text-base leading-relaxed text-[#5C5850]">
-            {settings.confirmationMessage.replace(/\{name\}/g, submittedName)}
+            <LinkedText text={settings.confirmationMessage.replace(/\{name\}/g, submittedName)} />
           </p>
         </div>
       </main>
@@ -507,7 +508,7 @@ export default function RegisterPage() {
             <h2 id="terms-title" className="mb-3 text-lg font-semibold">
               Volunteer Terms &amp; Conditions
             </h2>
-            <p className="mb-6 whitespace-pre-line text-base leading-relaxed text-[#5C5850]">{settings.termsText}</p>
+            <p className="mb-6 whitespace-pre-line text-base leading-relaxed text-[#5C5850]"><LinkedText text={settings.termsText} /></p>
             <button
               type="button"
               onClick={() => setTermsOpen(false)}

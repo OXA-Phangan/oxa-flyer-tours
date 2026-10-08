@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import {
@@ -17,6 +17,106 @@ const beigeButton =
 const plainButton =
   "rounded-xl border border-[#D6D1C3] bg-white px-3 py-2 text-sm font-semibold text-[#201E1B] disabled:opacity-40";
 
+
+/**
+ * "🔗 Add link": inserts [Label](https://…) at the cursor of a textarea (the label
+ * can be renamed any time by editing the text in the brackets). If some text is
+ * selected it becomes the label.
+ */
+function LinkInserter({
+  textareaRef,
+  value,
+  onChange,
+}: {
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState("");
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const range = useRef<[number, number]>([0, 0]);
+
+  function openForm() {
+    const ta = textareaRef.current;
+    const start = ta?.selectionStart ?? value.length;
+    const end = ta?.selectionEnd ?? value.length;
+    range.current = [start, end];
+    setLabel(value.slice(start, end).replace(/[\[\]\n]/g, ""));
+    setUrl("");
+    setError(null);
+    setOpen(true);
+  }
+
+  function insert() {
+    const text = label.trim();
+    let href = url.trim();
+    if (!text) return setError("Please enter the text that should be shown.");
+    if (!href) return setError("Please enter the link.");
+    if (!/^https?:\/\//i.test(href)) href = `https://${href}`;
+    if (/\s/.test(href) || !/^https?:\/\/[^/]+\.[^/]+/i.test(href)) return setError("That doesn't look like a valid link.");
+    href = href.replace(/\)/g, "%29");
+    const [start, end] = range.current;
+    const md = `[${text.replace(/[\[\]]/g, "")}](${href})`;
+    onChange(value.slice(0, start) + md + value.slice(end));
+    setOpen(false);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(start + md.length, start + md.length);
+      }
+    });
+  }
+
+  if (!open) {
+    return (
+      <button type="button" onClick={openForm} className={plainButton}>
+        🔗 Add link
+      </button>
+    );
+  }
+  return (
+    <div className="w-full space-y-2 rounded-xl border border-[#E2DFD6] bg-[#FBF9F4] p-3">
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[#5C5850]">Text shown</label>
+        <input
+          type="text"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="e.g. House rules"
+          className="block w-full min-w-0 rounded-xl border border-[#E2DFD6] bg-white px-3 py-2.5 text-base"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[#5C5850]">Link</label>
+        <input
+          type="url"
+          inputMode="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://…"
+          className="block w-full min-w-0 rounded-xl border border-[#E2DFD6] bg-white px-3 py-2.5 text-base"
+        />
+      </div>
+      {error && <p className="text-sm text-red-800">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => setOpen(false)} className={plainButton}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={insert}
+          className="rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-3 py-2 text-sm font-semibold text-[#201E1B]"
+        >
+          Insert
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Crew → Registrations → Settings: the texts of the public registration form.
  * Saved at flyerSettings/registration; /register falls back to the built-in
@@ -30,6 +130,8 @@ export default function RegistrationSettingsPanel({
   onBack: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
+  const termsRef = useRef<HTMLTextAreaElement>(null);
+  const messageRef = useRef<HTMLTextAreaElement>(null);
   const [terms, setTerms] = useState(DEFAULT_TERMS_TEXT);
   const [message, setMessage] = useState(DEFAULT_CONFIRMATION_MESSAGE);
   const [busy, setBusy] = useState(false);
@@ -122,6 +224,7 @@ export default function RegistrationSettingsPanel({
             </div>
             <textarea
               id="termsText"
+              ref={termsRef}
               rows={18}
               value={terms}
               onChange={(e) => {
@@ -130,9 +233,20 @@ export default function RegistrationSettingsPanel({
               }}
               className={textareaClass}
             />
-            <p className="mt-1 text-xs text-[#8A857A]">
+            <div className="mt-2">
+              <LinkInserter
+                textareaRef={termsRef}
+                value={terms}
+                onChange={(v) => {
+                  setTerms(v);
+                  setSaved(false);
+                }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-[#8A857A]">
               Shown in the pop-up behind “Volunteer Terms &amp; Conditions”. Line breaks are kept; leave a blank line
-              between sections.
+              between sections. Links look like [Text](https://…) — use “Add link”, and rename a link any time by
+              editing the text in the square brackets.
             </p>
           </div>
 
@@ -147,6 +261,7 @@ export default function RegistrationSettingsPanel({
             </div>
             <textarea
               id="confirmationMessage"
+              ref={messageRef}
               rows={5}
               value={message}
               onChange={(e) => {
@@ -155,8 +270,18 @@ export default function RegistrationSettingsPanel({
               }}
               className={textareaClass}
             />
-            <p className="mt-1 text-xs text-[#8A857A]">
-              Appears under “Thanks, &lt;first name&gt;!”. Use {"{name}"} to insert the first name inside the text.
+            <div className="mt-2">
+              <LinkInserter
+                textareaRef={messageRef}
+                value={message}
+                onChange={(v) => {
+                  setMessage(v);
+                  setSaved(false);
+                }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-[#8A857A]">
+              Appears under “Thanks, &lt;first name&gt;!”. Use {"{name}"} to insert the first name inside the text. Links work here too (“Add link”).
             </p>
           </div>
 
