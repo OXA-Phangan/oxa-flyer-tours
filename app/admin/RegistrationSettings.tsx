@@ -97,7 +97,8 @@ export default function RegistrationSettingsPanel({
   }
 
   return (
-    <>
+    // Bottom padding: the fixed "Share registration link" bar of the dashboard would otherwise cover the Save button.
+    <div className="pb-32">
       <button type="button" onClick={onBack} className="mb-4 text-sm text-[#5C5850] underline">
         ← Back to registrations
       </button>
@@ -191,6 +192,6 @@ export default function RegistrationSettingsPanel({
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }
