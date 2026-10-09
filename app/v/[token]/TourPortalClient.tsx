@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { extractLatLng, isShortMapsLink, searchUrl } from "@/lib/maps-link";
 import {
   addDoc,
   collection,
@@ -29,6 +30,29 @@ import { bikeLabel, parseRental, type BikeRental as BikeRentalDoc } from "@/lib/
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
 
 /* ===================== Types ===================== */
+
+/**
+ * Opens a stored Google Maps link in the format every Maps app accepts
+ * (see lib/maps-link.ts). Falls back to the stored link if anything goes wrong.
+ */
+function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
+  const direct = extractLatLng(link);
+  if (direct) {
+    e.preventDefault();
+    window.location.href = searchUrl(direct);
+    return;
+  }
+  if (!isShortMapsLink(link)) return;
+  e.preventDefault();
+  fetch(`/api/maps-resolve?u=${encodeURIComponent(link)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((c: { lat?: number; lng?: number } | null) => {
+      window.location.href = c && typeof c.lat === "number" && typeof c.lng === "number" ? searchUrl({ lat: c.lat, lng: c.lng }) : link;
+    })
+    .catch(() => {
+      window.location.href = link;
+    });
+}
 
 type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
 
@@ -1567,6 +1591,7 @@ function ActiveSpotCard({
           href={spot.mapsLink}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={(e) => openMapsLink(e, spot.mapsLink!)}
           className="mb-4 block w-full rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-center text-base font-semibold"
         >
           📍 Google Maps Location
