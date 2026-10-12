@@ -248,6 +248,8 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [stayEditError, setStayEditError] = useState<string | null>(null);
 
   const [chatOpen, setChatOpen] = useState<"direct" | "group" | null>(null);
+  // Tour footer "Chat" button: first ask whether to write to OXA or to the group.
+  const [chatPickerOpen, setChatPickerOpen] = useState(false);
   const [directMessages, setDirectMessages] = useState<ChatMessage[] | null>(null);
   const [groupMessages, setGroupMessages] = useState<ChatMessage[] | null>(null);
   const [directUnread, setDirectUnread] = useState(false);
@@ -843,6 +845,62 @@ export default function TourPortalClient({ token }: { token: string }) {
 
   /* ===================== Screens ===================== */
 
+  const chatPicker =
+    chatPickerOpen && !chatOpen ? (
+      <div
+        className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+        onClick={() => setChatPickerOpen(false)}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-md space-y-3 rounded-t-2xl bg-white p-6 sm:rounded-2xl"
+        >
+          <h2 className="text-lg font-semibold">Which chat?</h2>
+          <button
+            type="button"
+            onClick={() => {
+              setChatPickerOpen(false);
+              setChatOpen("direct");
+            }}
+            className="relative block w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-left text-base font-semibold text-[#201E1B]"
+          >
+            💬 Chat with OXA
+            {directUnread && (
+                <span
+                  role="img"
+                  aria-label="New message"
+                  className="absolute right-3 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-green-500"
+                />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setChatPickerOpen(false);
+              setChatOpen("group");
+            }}
+            className="relative block w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-left text-base font-semibold text-[#201E1B]"
+          >
+            👥 Group Chat
+            {groupUnread && (
+                <span
+                  role="img"
+                  aria-label="New messages"
+                  className="absolute right-3 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-green-500"
+                />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setChatPickerOpen(false)}
+            className="block w-full px-4 py-2 text-center text-sm text-[#5C5850] underline"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : null;
+
   const chatSheet = chatOpen ? (
           <div
             className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
@@ -1435,10 +1493,10 @@ export default function TourPortalClient({ token }: { token: string }) {
           <div className="mx-auto flex max-w-md gap-3">
             <button
               type="button"
-              onClick={() => setChatOpen("direct")}
+              onClick={() => setChatPickerOpen(true)}
               className="relative flex-1 rounded-2xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold text-[#201E1B]"
             >
-              {directUnread && (
+              {(directUnread || groupUnread) && (
                 <span
                   role="img"
                   aria-label="New message"
@@ -1461,6 +1519,7 @@ export default function TourPortalClient({ token }: { token: string }) {
           </div>
         </div>
 
+        {chatPicker}
         {chatSheet}
 
         {skipSheetOpen && (
