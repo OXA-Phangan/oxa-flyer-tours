@@ -59,6 +59,8 @@ export type BikeRental = {
   photoPaths: string[];
   createdBy: string;
   createdAt: Timestamp | null;
+  /** Admin ticked "money collected" (cash already received from the volunteer). */
+  paid: boolean;
 };
 
 export type BikeSlot = {
@@ -89,6 +91,7 @@ export function parseRental(id: string, d: Record<string, unknown>): BikeRental 
     photoPaths: Array.isArray(d.photoPaths) ? d.photoPaths.filter((p): p is string => typeof p === "string") : [],
     createdBy: typeof d.createdBy === "string" ? d.createdBy : "",
     createdAt: (d.createdAt as Timestamp | undefined) ?? null,
+    paid: d.paid === true,
   };
 }
 
@@ -103,6 +106,11 @@ export function compareRentals(a: BikeRental, b: BikeRental): number {
 /** Cancelled rentals are not charged. */
 export function rentalTotal(rentals: BikeRental[]): number {
   return rentals.reduce((sum, r) => (r.status === "cancelled" ? sum : sum + r.amount), 0);
+}
+
+/** Not cancelled and not yet marked as collected. */
+export function outstandingTotal(rentals: BikeRental[]): number {
+  return rentals.reduce((sum, r) => (r.status === "cancelled" || r.paid ? sum : sum + r.amount), 0);
 }
 
 export function activeRentalCount(rentals: BikeRental[]): number {

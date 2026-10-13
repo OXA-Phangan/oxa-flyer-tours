@@ -8,6 +8,7 @@ import {
   getDoc,
   onSnapshot,
   serverTimestamp,
+  updateDoc,
   writeBatch,
 } from "firebase/firestore";
 import { getDownloadURL, ref } from "firebase/storage";
@@ -23,6 +24,7 @@ import {
   formatThb,
   parseRental,
   rentalTotal,
+  outstandingTotal,
   slotId,
   type BikeId,
   type BikeRental,
@@ -126,6 +128,10 @@ async function cancelRental(r: BikeRental) {
   await batch.commit();
 }
 
+async function setPaid(r: BikeRental, paid: boolean) {
+  await updateDoc(rentalRef(r), { paid, paidAt: paid ? serverTimestamp() : null, updatedAt: serverTimestamp() });
+}
+
 /* ---------- one rental row (used in the profile section and in the Bikes tab) ---------- */
 
 function RentalRow({
@@ -137,10 +143,23 @@ function RentalRow({
   showName?: boolean;
   first: boolean;
 }) {
-  const [busy, setBusy] = useState<"confirm" | "cancel" | null>(null);
+  const [busy, setBusy] = useState<"confirm" | "cancel" | "paid" | null>(null);
   const [askCancel, setAskCancel] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelled = r.status === "cancelled";
+
+  async function togglePaid() {
+    setBusy("paid");
+    setError(null);
+    try {
+      await setPaid(r, !r.paid);
+    } catch (err) {
+      console.error("[admin] bike paid toggle failed:", err);
+      setError("Couldn't save. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function run(kind: "confirm" | "cancel") {
     setBusy(kind);
@@ -190,7 +209,28 @@ function RentalRow({
       {error && <p className="mt-2 text-sm text-red-800">{error}</p>}
 
       {!cancelled && !askCancel && (
-        <div className="mt-2.5 flex justify-end gap-2">
+        <div className="mt-2.5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={r.paid}
+            disabled={busy !== null}
+            onClick={togglePaid}
+            className={`mr-auto flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-40 ${
+              r.paid
+                ? "border-[#A9D1B8] bg-[#E6F2EA] text-[#2F6E48]"
+                : "border-[#BDB6A2] bg-[#E9E4D6] text-[#201E1B]"
+            }`}
+          >
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded border text-xs ${
+                r.paid ? "border-[#2F6E48] bg-[#2F6E48] text-white" : "border-[#8A857A] bg-white text-transparent"
+              }`}
+            >
+              ✓
+            </span>
+            {r.paid ? "Collected" : "Collected?"}
+          </button>
           {r.status === "requested" && (
             <button type="button" disabled={busy !== null} onClick={() => run("confirm")} className={beigeButton}>
               {busy === "confirm" ? "Saving…" : "Confirm"}
@@ -389,6 +429,7 @@ export function VolunteerBikeSection({
   }, [volunteerId]);
 
   const total = rentals ? rentalTotal(rentals) : 0;
+  const outstanding = rentals ? outstandingTotal(rentals) : 0;
   const days = rentals ? rentals.filter((r) => r.kind === "rental" && r.status !== "cancelled").length : 0;
   const charges = rentals ? rentals.filter((r) => r.kind === "charge" && r.status !== "cancelled").length : 0;
 
@@ -428,8 +469,19 @@ export function VolunteerBikeSection({
             {days} {days === 1 ? "rental" : "rentals"} × {BIKE_PRICE_PER_DAY} THB
             {charges > 0 ? ` + ${charges} extra ${charges === 1 ? "charge" : "charges"}` : ""} · cancelled not counted
           </p>
+          {total > 0 && (
+            <p className="mt-1 text-sm font-semibold text-[#2F6E48]">
+              {outstanding === 0
+                ? "✓ All collected"
+                : outstanding < total
+                  ? `${formatThb(total - outstanding)} already collected · ${formatThb(outstanding)} still open`
+                  : null}
+            </p>
+          )}
         </div>
-        <p className="text-2xl font-semibold">{formatThb(total)}</p>
+        <p className={`text-2xl font-semibold ${total > 0 && outstanding === 0 ? "line-through opacity-50" : ""}`}>
+          {formatThb(outstanding < total ? outstanding : total)}
+        </p>
       </div>
     </div>
   );
@@ -493,7 +545,8 @@ export function BikesTab() {
         const list = byVol.get(v.id) ?? [];
         return {
           v,
-          total: rentalTotal(list),
+          total: outstandingTotal(list),
+          collected: rentalTotal(list) - outstandingTotal(list),
           count: list.filter((r) => r.kind === "rental" && r.status !== "cancelled").length,
         };
       })
@@ -553,12 +606,13 @@ export function BikesTab() {
         {rentals !== null && toCollect.length === 0 && (
           <p className="px-4 py-4 text-sm text-[#5C5850]">Nothing to collect right now.</p>
         )}
-        {toCollect.map(({ v, total, count }, i) => (
+        {toCollect.map(({ v, total, collected, count }, i) => (
           <div key={v.id} className={`flex items-center gap-3 px-4 py-3.5 ${i > 0 ? "border-t border-[#E2DFD6]" : ""}`}>
             <div className="min-w-0 flex-1">
               <p className="font-semibold">{v.name}</p>
               <p className="text-sm text-[#5C5850]">
                 Check-out {dayLabel(v.checkOutDate)} · {count} {count === 1 ? "rental" : "rentals"}
+                {collected > 0 ? ` · ${formatThb(collected)} already collected` : ""}
               </p>
             </div>
             <p className="text-base font-semibold">{formatThb(total)}</p>
