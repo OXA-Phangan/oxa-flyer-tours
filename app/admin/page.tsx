@@ -1403,10 +1403,28 @@ function RouteEditor({
 
 /* ===================== Crew ===================== */
 
+type CrewGroup = "active" | "confirmed" | "departed";
+
+/**
+ * Active = already arrived, Confirmed = registered/approved but arrival date still ahead,
+ * Departed = left / inactive. Derived from `status` + `checkInDate` (Bangkok date).
+ */
+function crewGroup(v: FlyerVolunteerDoc, today: string): CrewGroup {
+  if (v.status === "departed") return "departed";
+  return v.checkInDate > today ? "confirmed" : "active";
+}
+
+const CREW_GROUPS: { key: CrewGroup; label: string; chip: string }[] = [
+  { key: "active", label: "Active", chip: "bg-green-100 text-green-800" },
+  { key: "confirmed", label: "Confirmed", chip: "bg-[#FFF3D6] text-[#96742A]" },
+  { key: "departed", label: "Departed", chip: "bg-[#E2DFD6] text-[#5C5850]" },
+];
+
 function CrewSection({ adminEmail }: { adminEmail: string }) {
   const [volunteers, setVolunteers] = useState<FlyerVolunteerDoc[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const today = bangkokToday();
 
   useEffect(() => {
     return onSnapshot(
@@ -1414,8 +1432,7 @@ function CrewSection({ adminEmail }: { adminEmail: string }) {
       (snap) => {
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as FlyerVolunteerDoc);
         rows.sort((a, b) => {
-          // Active first, pending-stay-edit requests bubble to the top within that, then by name.
-          if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+          // Pending-stay-edit requests bubble to the top within each group, then by name.
           if (a.hasPendingStayEdit !== b.hasPendingStayEdit) return a.hasPendingStayEdit ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
@@ -1449,39 +1466,57 @@ function CrewSection({ adminEmail }: { adminEmail: string }) {
         <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>No volunteers yet.</div>
       )}
 
-      <ul className="space-y-3">
-        {volunteers?.map((v) => (
-          <li key={v.id}>
-            <button
-              type="button"
-              onClick={() => setSelectedId(v.id)}
-              className={`${cardClass} block w-full p-4 text-left active:bg-[#FBF9F4]`}
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="truncate text-base font-semibold">{v.name}</span>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                    v.status === "active" ? "bg-green-100 text-green-800" : "bg-[#E2DFD6] text-[#5C5850]"
-                  }`}
-                >
-                  {v.status === "active" ? "Active" : "Departed"}
-                </span>
-              </div>
-              <div className="mt-1 text-sm text-[#5C5850]">
-                {v.checkInDate} → {v.checkOutDate}
-              </div>
-              <div className="mt-1 flex gap-2 text-xs">
-                {v.onBreak && <span className="rounded-full bg-[#FBF9F4] px-2 py-0.5 text-[#8A857A]">☕ On break</span>}
-                {v.hasPendingStayEdit && (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
-                    ⏳ Stay change requested
-                  </span>
-                )}
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
+      {CREW_GROUPS.map((g) => {
+        const list = (volunteers ?? [])
+          .filter((v) => crewGroup(v, today) === g.key)
+          .sort((a, b) =>
+            g.key === "confirmed"
+              ? a.checkInDate.localeCompare(b.checkInDate) || a.name.localeCompare(b.name)
+              : g.key === "departed"
+                ? b.checkOutDate.localeCompare(a.checkOutDate) || a.name.localeCompare(b.name)
+                : 0,
+          );
+        if (volunteers === null || list.length === 0) return null;
+        return (
+          <section key={g.key} className="mb-6">
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">
+              {g.label}
+              <span className={`rounded-full px-2 py-0.5 text-xs ${g.chip}`}>{list.length}</span>
+            </h3>
+            <ul className="space-y-3">
+              {list.map((v) => (
+                <li key={v.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(v.id)}
+                    className={`${cardClass} block w-full p-4 text-left active:bg-[#FBF9F4]`}
+                  >
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="truncate text-base font-semibold">{v.name}</span>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${g.chip}`}>
+                        {g.label}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-[#5C5850]">
+                      {v.checkInDate} → {v.checkOutDate}
+                    </div>
+                    <div className="mt-1 flex gap-2 text-xs">
+                      {v.onBreak && (
+                        <span className="rounded-full bg-[#FBF9F4] px-2 py-0.5 text-[#8A857A]">☕ On break</span>
+                      )}
+                      {v.hasPendingStayEdit && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
+                          ⏳ Stay change requested
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </>
   );
 }
@@ -1670,7 +1705,7 @@ function CrewDetail({
       <div className={`${cardClass} mb-5 divide-y divide-[#E2DFD6]`}>
         <Row label="Name" value={fullName(v)} />
         <Row label="WhatsApp" value={v.whatsapp || "—"} />
-        <Row label="Status" value={v.status === "active" ? "Active" : "Departed"} />
+        <Row label="Status" value={CREW_GROUPS.find((g) => g.key === crewGroup(v, bangkokToday()))?.label ?? "Active"} />
         <Row label="Check-in" value={formatDateTime(v.checkInDate, v.checkInTime)} />
         <Row label="Check-out" value={formatDateTime(v.checkOutDate, v.checkOutTime)} />
         <Row label="On break" value={v.onBreak ? "✓ Yes" : "✗ No"} />
