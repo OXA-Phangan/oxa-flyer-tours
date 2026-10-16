@@ -60,6 +60,8 @@ type RouteSpot = {
   time: string;
   comment: string;
   mapsLink: string | null;
+  /** "HH:MM" (Bangkok): the volunteer can't take a picture / skip this spot before this time. */
+  notBefore?: string | null;
 };
 
 type EditorSpot = RouteSpot & { _k: number };
@@ -1097,6 +1099,7 @@ function RouteEditor({
       time: (sp.time ?? "").trim(),
       comment: (sp.comment ?? "").trim(),
       mapsLink: sp.mapsLink?.trim() || null,
+      notBefore: sp.notBefore && /^\d{2}:\d{2}$/.test(sp.notBefore) ? sp.notBefore : null,
     }));
   }
 
@@ -1333,6 +1336,19 @@ function RouteEditor({
               placeholder="Google Maps link (optional)"
               className={spotTextInput}
             />
+
+            <label className="flex items-center gap-3 text-sm text-[#5C5850]">
+              <span className="flex-1">
+                Earliest start (optional)
+                <span className="block text-xs text-[#8A857A]">Before this time the volunteer can&apos;t start the spot.</span>
+              </span>
+              <input
+                type="time"
+                value={sp.notBefore ?? ""}
+                onChange={(e) => updateSpot(i, { notBefore: e.target.value || null })}
+                className="w-32 rounded-lg border border-[#E2DFD6] bg-white px-3 py-2 text-sm text-[#201E1B] focus:border-[#201E1B] focus:outline-none"
+              />
+            </label>
           </div>
         ))}
 

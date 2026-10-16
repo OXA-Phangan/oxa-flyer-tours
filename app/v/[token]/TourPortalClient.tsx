@@ -62,6 +62,7 @@ type Spot = {
   time: string;
   comment: string;
   mapsLink: string | null;
+  notBefore?: string | null;
 };
 
 type FlyerRoute = {
@@ -1610,6 +1611,31 @@ function CollapsedSpotRow({
   );
 }
 
+/** Current Bangkok time as "HH:MM" (UTC+7, no DST). */
+function bangkokHm(): string {
+  const d = new Date(Date.now() + 7 * 3600 * 1000);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+/** "18:45" → "6:45 PM" */
+function formatHm12(hm: string): string {
+  const [h, m] = hm.split(":").map(Number);
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
+}
+
+/** Re-renders every 20 s; true while the spot's "earliest start" time (Bangkok) hasn't been reached. */
+function useSpotLocked(notBefore: string | null | undefined): boolean {
+  const valid = typeof notBefore === "string" && /^\d{2}:\d{2}$/.test(notBefore);
+  const [now, setNow] = useState(bangkokHm);
+  useEffect(() => {
+    if (!valid) return;
+    setNow(bangkokHm());
+    const id = setInterval(() => setNow(bangkokHm()), 20000);
+    return () => clearInterval(id);
+  }, [valid]);
+  return valid && now < (notBefore as string);
+}
+
 function ActiveSpotCard({
   index,
   spot,
@@ -1630,6 +1656,7 @@ function ActiveSpotCard({
   onNext: () => void;
 }) {
   const resolvable = isResolvable(spot);
+  const locked = useSpotLocked(spot.notBefore);
 
   return (
     <div className={`${cardClass} p-4`}>
@@ -1662,6 +1689,12 @@ function ActiveSpotCard({
         </div>
       )}
 
+      {!resolvable && locked && (
+        <div className="mb-3 rounded-xl border border-[#E2C27A] bg-[#FFF3D6] px-4 py-3 text-base font-semibold text-[#96742A]">
+          ⏰ Available from {formatHm12(spot.notBefore as string)}
+        </div>
+      )}
+
       {!resolvable && (
         <div className="flex gap-3">
           {uploadState === "uploading" ? (
@@ -1677,12 +1710,12 @@ function ActiveSpotCard({
               ❌ Failed. Try Again
             </button>
           ) : (
-            <button type="button" onClick={onCamera} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-semibold">
+            <button type="button" disabled={locked} onClick={onCamera} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-semibold disabled:opacity-40">
               📸 Take a Picture
             </button>
           )}
           {status !== "completed" && uploadState !== "uploading" && uploadState !== "success" && (
-            <button type="button" onClick={onSkip} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-white px-3 py-4 text-base font-semibold text-[#5C5850]">
+            <button type="button" disabled={locked} onClick={onSkip} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-white px-3 py-4 text-base font-semibold text-[#5C5850] disabled:opacity-40">
               ⏭️ Skip Spot
             </button>
           )}
