@@ -36,36 +36,39 @@ import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } fro
  * (see lib/maps-link.ts). Falls back to the stored link if anything goes wrong.
  */
 function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
-  // Always open Maps in a NEW tab so the tour portal stays where it is. For links we can
-  // rewrite synchronously we just swap the anchor's href and let target="_blank" do its job.
-  const anchor = e.currentTarget;
-  const name = extractPlaceName(link);
-  if (name) {
-    anchor.href = searchUrlByName(name);
-    return;
-  }
-  const direct = extractLatLng(link);
-  if (direct) {
-    anchor.href = searchUrl(direct);
-    return;
-  }
-  if (!isShortMapsLink(link)) return;
-  // Short link: resolve on the server. Open the new tab right now (inside the tap, so iOS
-  // does not block it) and point it at the final URL once we have it.
+  // Goal: tap -> Google Maps APP opens directly (iOS asks once "Open in Google Maps?"), the
+  // tour portal stays untouched. The app is addressed via its URL scheme, which never
+  // replaces the current page. Desktop browsers get the web version in a new tab.
   e.preventDefault();
-  const w = window.open("", "_blank");
-  const go = (url: string) => {
-    if (w) w.location.href = url;
-    else window.location.href = url;
+  const ua = navigator.userAgent || "";
+  const isIOS = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
+
+  const launch = (c: { name?: string | null; lat?: number; lng?: number } | null) => {
+    const name = c?.name || extractPlaceName(link);
+    const ll = typeof c?.lat === "number" && typeof c?.lng === "number" ? { lat: c.lat, lng: c.lng } : extractLatLng(link);
+    const web = name ? searchUrlByName(name) : ll ? searchUrl(ll) : link;
+    const q = name ? encodeURIComponent(name) : ll ? `${ll.lat},${ll.lng}` : null;
+    const openWeb = () => {
+      window.open(web, "_blank");
+    };
+    if (!q || !(isIOS || isAndroid)) {
+      openWeb();
+      return;
+    }
+    const appUrl = isIOS ? `comgooglemaps://?q=${q}` : `geo:0,0?q=${q}`;
+    window.location.href = appUrl;
   };
+
+  const direct = extractPlaceName(link) || extractLatLng(link);
+  if (direct || !isShortMapsLink(link)) {
+    launch(null);
+    return;
+  }
   fetch(`/api/maps-resolve?u=${encodeURIComponent(link)}`)
     .then((r) => (r.ok ? r.json() : null))
-    .then((c: { lat?: number; lng?: number; name?: string | null } | null) => {
-      if (c && typeof c.name === "string" && c.name) go(searchUrlByName(c.name));
-      else if (c && typeof c.lat === "number" && typeof c.lng === "number") go(searchUrl({ lat: c.lat, lng: c.lng }));
-      else go(link);
-    })
-    .catch(() => go(link));
+    .then((c) => launch(c))
+    .catch(() => launch(null));
 }
 
 type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
