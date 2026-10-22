@@ -36,32 +36,36 @@ import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } fro
  * (see lib/maps-link.ts). Falls back to the stored link if anything goes wrong.
  */
 function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
-  // Prefer the place NAME Google itself put in the link, so Maps shows the named place;
-  // coordinates only if the link carries no name.
+  // Always open Maps in a NEW tab so the tour portal stays where it is. For links we can
+  // rewrite synchronously we just swap the anchor's href and let target="_blank" do its job.
+  const anchor = e.currentTarget;
   const name = extractPlaceName(link);
   if (name) {
-    e.preventDefault();
-    window.location.href = searchUrlByName(name);
+    anchor.href = searchUrlByName(name);
     return;
   }
   const direct = extractLatLng(link);
   if (direct) {
-    e.preventDefault();
-    window.location.href = searchUrl(direct);
+    anchor.href = searchUrl(direct);
     return;
   }
   if (!isShortMapsLink(link)) return;
+  // Short link: resolve on the server. Open the new tab right now (inside the tap, so iOS
+  // does not block it) and point it at the final URL once we have it.
   e.preventDefault();
+  const w = window.open("", "_blank");
+  const go = (url: string) => {
+    if (w) w.location.href = url;
+    else window.location.href = url;
+  };
   fetch(`/api/maps-resolve?u=${encodeURIComponent(link)}`)
     .then((r) => (r.ok ? r.json() : null))
     .then((c: { lat?: number; lng?: number; name?: string | null } | null) => {
-      if (c && typeof c.name === "string" && c.name) window.location.href = searchUrlByName(c.name);
-      else if (c && typeof c.lat === "number" && typeof c.lng === "number") window.location.href = searchUrl({ lat: c.lat, lng: c.lng });
-      else window.location.href = link;
+      if (c && typeof c.name === "string" && c.name) go(searchUrlByName(c.name));
+      else if (c && typeof c.lat === "number" && typeof c.lng === "number") go(searchUrl({ lat: c.lat, lng: c.lng }));
+      else go(link);
     })
-    .catch(() => {
-      window.location.href = link;
-    });
+    .catch(() => go(link));
 }
 
 type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
