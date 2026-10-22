@@ -18,6 +18,8 @@ export type LibrarySpot = {
 /** One entry of flyerRoutes/{id}.spots[] as stored. */
 export type StoredRouteSpot = {
   spotId?: string | null;
+  /** Library spot only: name shown in THIS tour instead of the library name ("" / missing = library name). */
+  nameOverride?: string | null;
   name: string;
   type: SpotType;
   time: string;
@@ -37,7 +39,7 @@ export function resolveRouteSpot(entry: StoredRouteSpot, library: Map<string, Li
   if (!lib) return { ...entry, comment: entry.comment ?? "", time: entry.time ?? "", fromLibrary: false };
   return {
     ...entry,
-    name: lib.name,
+    name: entry.nameOverride?.trim() ? entry.nameOverride.trim() : lib.name,
     mapsLink: lib.mapsLink,
     mapsQuery: lib.mapsQuery,
     comment: entry.comment?.trim() ? entry.comment : lib.comment,

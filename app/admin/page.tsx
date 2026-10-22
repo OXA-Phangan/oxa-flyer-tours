@@ -59,6 +59,8 @@ type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
 type RouteSpot = {
   /** Set = this entry points at a spot of the shared library (flyerSpots); name/mapsLink are then only a snapshot. */
   spotId?: string | null;
+  /** Library spot: name shown only in this tour. */
+  nameOverride?: string | null;
   mapsQuery?: string | null;
   name: string;
   type: SpotType;
@@ -1194,8 +1196,14 @@ function RouteEditor({
   function cleanedSpots(): RouteSpot[] {
     return spots.map((sp) => ({
       // Library spots: the library is the source of truth; name/link are only a fallback snapshot.
-      ...(sp.spotId ? { spotId: sp.spotId, mapsQuery: libById.get(sp.spotId)?.mapsQuery ?? sp.mapsQuery ?? null } : {}),
-      name: (sp.spotId ? (libById.get(sp.spotId)?.name ?? sp.name) : sp.name).trim(),
+      ...(sp.spotId
+        ? {
+            spotId: sp.spotId,
+            nameOverride: sp.nameOverride?.trim() || null,
+            mapsQuery: libById.get(sp.spotId)?.mapsQuery ?? sp.mapsQuery ?? null,
+          }
+        : {}),
+      name: (sp.spotId ? (sp.nameOverride?.trim() || libById.get(sp.spotId)?.name || sp.name) : sp.name).trim(),
       type: sp.type,
       time: (sp.time ?? "").trim(),
       comment: (sp.comment ?? "").trim(),
@@ -1391,11 +1399,21 @@ function RouteEditor({
 
             {sp.spotId ? (
               <div>
-                <p className="text-base font-semibold">{libById.get(sp.spotId)?.name ?? sp.name}</p>
+                <p className="text-base font-semibold">
+                  {sp.nameOverride?.trim() || (libById.get(sp.spotId)?.name ?? sp.name)}
+                </p>
                 <p className="text-xs text-[#8A857A]">
                   From the spot library
+                  {sp.nameOverride?.trim() && libById.get(sp.spotId) ? ` (library name: ${libById.get(sp.spotId)!.name})` : ""}
                   {library && !libById.has(sp.spotId) ? " · not found in the library any more (showing the last saved name)" : ""}
                 </p>
+                <input
+                  type="text"
+                  value={sp.nameOverride ?? ""}
+                  onChange={(e) => updateSpot(i, { nameOverride: e.target.value })}
+                  placeholder="Different name only in this tour (optional)"
+                  className={`${spotTextInput} mt-2`}
+                />
               </div>
             ) : (
               <input

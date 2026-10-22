@@ -7,9 +7,12 @@
 // Apply (backup of all routes first; safe to re-run, already migrated entries are skipped):
 //   node scripts/migrate-spots-to-library.js --apply
 //
-// Merge rule: two spots are the same spot if they have the same NAME (case/spacing ignored) OR the
-// same Google Maps link / place. Per library spot: most common name, link and instruction text win.
-// A tour whose instruction text differs keeps its own text as an "override" (nothing is lost).
+// Merge rule: two spots are the same spot if they have the same NAME (case, spacing and punctuation
+// ignored, plus the ALIASES below for known spelling variants). Same Google link alone does NOT merge
+// (data typos or two different stops at one address would be merged wrongly).
+// Per library spot: the most common name, link and instruction text win.
+// A tour that used a different spelling keeps it as "nameOverride", and a tour whose instruction text
+// differs keeps its own text as an override, so nothing a volunteer sees today is lost.
 //
 // Auth like import-flyer-routes.js: GOOGLE_APPLICATION_CREDENTIALS=<key.json> or `gcloud auth application-default login`.
 
@@ -66,7 +69,27 @@ async function resolveShort(url) {
   return { name, ll };
 }
 
-const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+const norm = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[´`'’‘“”"]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+const normText = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+// Known spelling variants of the SAME place: variant -> the name they are merged into (compared via norm()).
+const ALIASES = {
+  "Farida Halal Restaurant": "Farida Helal Restaurant",
+  "Uppercut Restaurant": "Uppercut - Thai Restaurant",
+  "MamaKOP Restaurant": "MamaKOP",
+  "Paprika Restaurant": "Paprika",
+  "Mama Market Srithanu (All tables here)": "Mama Market Srithanu",
+  "Haad Rin Beach & Beachfront resorts - Start at: “Tommy Resort”": "Haad Rin Beach & Beachfront resorts",
+  "Amsterdam Bar Upstairs & Bikes": "Amsterdam Bar - Upstairs & all bikes",
+  "Amsterdam Bar - Upstairs & Bikes": "Amsterdam Bar - Upstairs & all bikes",
+};
+const ALIAS_KEYS = new Map(Object.entries(ALIASES).map(([from, to]) => [norm(from), norm(to)]));
+const canon = (name) => ALIAS_KEYS.get(norm(name)) || norm(name);
 const mostCommon = (arr) => {
   const counts = new Map();
   for (const v of arr) if (v) counts.set(v, (counts.get(v) || 0) + 1);
@@ -99,7 +122,7 @@ async function main() {
 
   // Existing library spots (from an earlier run) are reused by name.
   const existingByName = new Map();
-  libSnap.docs.forEach((d) => existingByName.set(norm(d.data().name), d.id));
+  libSnap.docs.forEach((d) => existingByName.set(canon(d.data().name), d.id));
 
   // 1. Collect every embedded NORMAL spot.
   const items = []; // { routeId, routeLabel, index, spot, nameKey, mapsKey, mapsName }
@@ -112,21 +135,13 @@ async function main() {
       if (sp.spotId || (sp.type && sp.type !== "NORMAL")) continue;
       const link = typeof sp.mapsLink === "string" ? sp.mapsLink.trim() : "";
       const info = await mapsInfo(link, cache);
-      items.push({ routeId: r.id, routeLabel: label, index: i, spot: sp, link, nameKey: norm(sp.name), mapsKey: info.key, mapsName: info.name });
+      items.push({ routeId: r.id, routeLabel: label, index: i, spot: sp, link, nameKey: canon(sp.name), mapsKey: info.key, mapsName: info.name });
     }
   }
 
-  // 2. Union by name OR maps key.
-  const parent = items.map((_, i) => i);
-  const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])));
-  const union = (a, b) => { parent[find(a)] = find(b); };
-  const byName = new Map(), byMaps = new Map();
-  items.forEach((it, i) => {
-    if (it.nameKey) { if (byName.has(it.nameKey)) union(i, byName.get(it.nameKey)); else byName.set(it.nameKey, i); }
-    if (it.mapsKey) { if (byMaps.has(it.mapsKey)) union(i, byMaps.get(it.mapsKey)); else byMaps.set(it.mapsKey, i); }
-  });
+  // 2. Group by (canonical) name only.
   const groups = new Map();
-  items.forEach((it, i) => { const g = find(i); groups.set(g, [...(groups.get(g) || []), it]); });
+  for (const it of items) groups.set(it.nameKey, [...(groups.get(it.nameKey) || []), it]);
 
   // 3. Build library spots.
   const lib = [];
@@ -134,13 +149,15 @@ async function main() {
     const name = mostCommon(members.map((m) => m.spot.name.trim()));
     const mapsLink = mostCommon(members.map((m) => m.link));
     const mapsName = mostCommon(members.map((m) => m.mapsName)) || null;
-    const comment = (mostCommon(members.map((m) => (m.spot.comment || "").trim())) || "").trim();
+    // The text most tours use (empty texts don't count as a vote).
+    const comment = (mostCommon(members.map((m) => (m.spot.comment || "").trim()).filter(Boolean)) || "").trim();
+    const emptyInTours = members.filter((m) => !(m.spot.comment || "").trim()).map((m) => m.routeLabel);
     const routesIn = [...new Set(members.map((m) => m.routeLabel))];
     const nameVariants = [...new Set(members.map((m) => m.spot.name.trim()))];
     const linkVariants = [...new Set(members.map((m) => m.link).filter(Boolean))];
-    const commentVariants = [...new Set(members.map((m) => (m.spot.comment || "").trim()))];
-    const existingId = existingByName.get(norm(name)) || null;
-    lib.push({ members, name, mapsLink, mapsQuery: mapsName, comment, routesIn, nameVariants, linkVariants, commentVariants, existingId });
+    const commentVariants = [...new Set(members.map((m) => normText(m.spot.comment)).filter(Boolean))];
+    const existingId = existingByName.get(canon(name)) || null;
+    lib.push({ members, emptyInTours, name, mapsLink, mapsQuery: mapsName, comment, routesIn, nameVariants, linkVariants, commentVariants, existingId });
   }
   lib.sort((a, b) => a.name.localeCompare(b.name));
 
@@ -157,6 +174,7 @@ async function main() {
     if (l.nameVariants.length > 1) say(`    ! verschiedene Namen: ${l.nameVariants.join(" | ")}`);
     if (l.linkVariants.length > 1) say(`    ! verschiedene Links (nehme den häufigsten):\n      ${l.linkVariants.join("\n      ")}`);
     if (l.commentVariants.length > 1) say(`    ! ${l.commentVariants.length} verschiedene Hinweistexte (häufigster wird Standard, Abweichungen bleiben in der Tour)`);
+    if (l.comment && l.emptyInTours.length) say(`    ! ohne Hinweistext in: ${l.emptyInTours.join("; ")} -> zeigen künftig den Standardtext "${l.comment}"`);
   }
   say();
   const single = lib.filter((l) => l.members.length === 1);
@@ -219,10 +237,11 @@ async function main() {
       spots[it.index] = {
         ...it.spot,
         spotId: id,
-        name: l.name,
+        nameOverride: it.spot.name.trim() !== l.name ? it.spot.name.trim() : null,
+        name: it.spot.name.trim(),
         mapsLink: l.mapsLink || null,
         mapsQuery: l.mapsQuery || null,
-        comment: own && own !== l.comment ? own : "",
+        comment: own && normText(own) !== normText(l.comment) ? own : "",
       };
     }
     await r.ref.update({ spots, updatedAt: FieldValue.serverTimestamp() });
