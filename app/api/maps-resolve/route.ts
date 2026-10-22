@@ -1,6 +1,6 @@
 // Resolves a Google Maps short link (maps.app.goo.gl/…) to coordinates by following its
 // redirects on the server, so the portal can open it in a format the Maps app accepts.
-import { extractLatLng, isShortMapsLink } from "@/lib/maps-link";
+import { extractLatLng, extractPlaceName, isShortMapsLink } from "@/lib/maps-link";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     if (!/(^|\.)google\.[a-z.]+$|(^|\.)goo\.gl$/.test(host)) break;
     const found = extractLatLng(current);
     if (found) {
-      return Response.json(found, { headers: { "Cache-Control": "public, max-age=86400" } });
+      return Response.json({ ...found, name: extractPlaceName(current) }, { headers: { "Cache-Control": "public, max-age=86400" } });
     }
   }
   return Response.json({ error: "no-coordinates" }, { status: 404 });

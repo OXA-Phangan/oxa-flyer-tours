@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { extractLatLng, isShortMapsLink, searchUrl } from "@/lib/maps-link";
+import { extractLatLng, extractPlaceName, isShortMapsLink, searchUrl, searchUrlByName } from "@/lib/maps-link";
 import {
   addDoc,
   collection,
@@ -36,6 +36,14 @@ import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } fro
  * (see lib/maps-link.ts). Falls back to the stored link if anything goes wrong.
  */
 function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
+  // Prefer the place NAME Google itself put in the link, so Maps shows the named place;
+  // coordinates only if the link carries no name.
+  const name = extractPlaceName(link);
+  if (name) {
+    e.preventDefault();
+    window.location.href = searchUrlByName(name);
+    return;
+  }
   const direct = extractLatLng(link);
   if (direct) {
     e.preventDefault();
@@ -46,8 +54,10 @@ function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
   e.preventDefault();
   fetch(`/api/maps-resolve?u=${encodeURIComponent(link)}`)
     .then((r) => (r.ok ? r.json() : null))
-    .then((c: { lat?: number; lng?: number } | null) => {
-      window.location.href = c && typeof c.lat === "number" && typeof c.lng === "number" ? searchUrl({ lat: c.lat, lng: c.lng }) : link;
+    .then((c: { lat?: number; lng?: number; name?: string | null } | null) => {
+      if (c && typeof c.name === "string" && c.name) window.location.href = searchUrlByName(c.name);
+      else if (c && typeof c.lat === "number" && typeof c.lng === "number") window.location.href = searchUrl({ lat: c.lat, lng: c.lng });
+      else window.location.href = link;
     })
     .catch(() => {
       window.location.href = link;

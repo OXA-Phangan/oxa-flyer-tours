@@ -38,3 +38,27 @@ export function isShortMapsLink(url: string): boolean {
 export function searchUrl({ lat, lng }: LatLng): string {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
 }
+
+/**
+ * The place name Google put into a /maps/place/<Name>/@lat,lng,… URL ("MoonSpoon+Restaurant" →
+ * "MoonSpoon Restaurant"). Searching by this name makes Maps show the place with its name
+ * (a bare coordinate search only drops an unnamed pin). null if the URL carries no name.
+ */
+export function extractPlaceName(url: string): string | null {
+  const m = /\/maps\/place\/([^/@?]+)/.exec(url);
+  if (!m) return null;
+  let name = m[1];
+  try {
+    name = decodeURIComponent(name.replace(/\+/g, " "));
+  } catch {
+    name = name.replace(/\+/g, " ");
+  }
+  name = name.trim();
+  // "/maps/place/9.67,100.06/…" is just coordinates, not a name.
+  if (!name || /^-?\d+(\.\d+)?[, ]+-?\d+(\.\d+)?$/.test(name)) return null;
+  return name;
+}
+
+export function searchUrlByName(name: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}`;
+}
