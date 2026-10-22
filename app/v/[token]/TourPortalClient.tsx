@@ -27,6 +27,7 @@ import ChatComposer from "@/components/ChatComposer";
 import ChatMessageBody from "@/components/ChatMessageBody";
 import BikeRental from "@/components/BikeRental";
 import { bikeLabel, parseRental, type BikeRental as BikeRentalDoc } from "@/lib/bike";
+import { libraryFromDoc, resolveRouteSpot, type LibrarySpot, type StoredRouteSpot } from "@/lib/spots";
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
 
 /* ===================== Types ===================== */
@@ -35,7 +36,7 @@ import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } fro
  * Opens a stored Google Maps link in the format every Maps app accepts
  * (see lib/maps-link.ts). Falls back to the stored link if anything goes wrong.
  */
-function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
+function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string, query?: string | null) {
   // Goal: tap -> Google Maps APP opens directly (iOS asks once "Open in Google Maps?"), the
   // tour portal stays untouched. The app is addressed via its URL scheme, which never
   // replaces the current page. Desktop browsers get the web version in a new tab.
@@ -45,7 +46,7 @@ function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
   const isAndroid = /Android/i.test(ua);
 
   const launch = (c: { name?: string | null; lat?: number; lng?: number } | null) => {
-    const name = c?.name || extractPlaceName(link);
+    const name = query || c?.name || extractPlaceName(link);
     const ll = typeof c?.lat === "number" && typeof c?.lng === "number" ? { lat: c.lat, lng: c.lng } : extractLatLng(link);
     const web = name ? searchUrlByName(name) : ll ? searchUrl(ll) : link;
     const q = name ? encodeURIComponent(name) : ll ? `${ll.lat},${ll.lng}` : null;
@@ -60,7 +61,7 @@ function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string) {
     window.location.href = appUrl;
   };
 
-  const direct = extractPlaceName(link) || extractLatLng(link);
+  const direct = query || extractPlaceName(link) || extractLatLng(link);
   if (direct || !isShortMapsLink(link)) {
     launch(null);
     return;
@@ -79,6 +80,8 @@ type Spot = {
   time: string;
   comment: string;
   mapsLink: string | null;
+  /** Name Google Maps is searched for (from the shared spot library). */
+  mapsQuery?: string | null;
   notBefore?: string | null;
 };
 
@@ -304,13 +307,23 @@ export default function TourPortalClient({ token }: { token: string }) {
 
         const routesSnap = await getDocs(collection(db, "flyerRoutes"));
         if (cancelled) return;
+        // Shared spot library: name / map / instructions come from here. If it can't be read, the
+        // snapshot stored in each tour entry is used instead.
+        const library = new Map<string, LibrarySpot>();
+        try {
+          const spotsSnap = await getDocs(collection(db, "flyerSpots"));
+          spotsSnap.docs.forEach((d) => library.set(d.id, libraryFromDoc(d.id, d.data())));
+        } catch (err) {
+          console.warn("[tour] spot library unavailable, using stored spot snapshots:", err);
+        }
+        if (cancelled) return;
         const loadedRoutes: FlyerRoute[] = routesSnap.docs.map((d) => {
-          const data = d.data() as { region: string; name: string; spots: Spot[]; completionMessage?: string | null };
+          const data = d.data() as { region: string; name: string; spots: StoredRouteSpot[]; completionMessage?: string | null };
           return {
             id: d.id,
             region: data.region,
             name: data.name,
-            spots: data.spots ?? [],
+            spots: (data.spots ?? []).map((sp) => resolveRouteSpot(sp, library)),
             completionMessage: data.completionMessage ?? null,
           };
         });
@@ -1694,7 +1707,7 @@ function ActiveSpotCard({
           href={spot.mapsLink}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={(e) => openMapsLink(e, spot.mapsLink!)}
+          onClick={(e) => openMapsLink(e, spot.mapsLink!, spot.mapsQuery)}
           className="mb-4 block w-full rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-center text-base font-semibold"
         >
           📍 Google Maps Location

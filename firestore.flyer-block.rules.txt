@@ -58,6 +58,12 @@
       allow create, update, delete: if isFlyerAdmin();
     }
 
+    // Shared spot library: the volunteer portal reads it, only flyer admins edit it.
+    match /flyerSpots/{spotId} {
+      allow get, list: if true;
+      allow create, update, delete: if isFlyerAdmin();
+    }
+
     match /flyerVolunteers/{token} {
       allow get: if true;
       // Management (employee portal calendar) may list too — read-only.

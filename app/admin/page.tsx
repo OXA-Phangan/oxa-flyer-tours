@@ -28,6 +28,8 @@ import { generateToken } from "@/lib/token";
 import ShiftPlan from "./ShiftPlan";
 import RegistrationSettingsPanel from "./RegistrationSettings";
 import { BikesTab, VolunteerBikeSection } from "./BikeRentals";
+import { SpotsSection, useSpotLibrary, detectMapsName } from "./Spots";
+import type { LibrarySpot } from "@/lib/spots";
 import { bangkokToday } from "@/lib/shifts";
 import { readSeen, writeSeen } from "@/lib/chat-seen";
 import { messagePreview, uploadChatMedia, type ChatMediaType, type PreparedMedia } from "@/lib/chat-media";
@@ -55,6 +57,9 @@ type Registration = {
 type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
 
 type RouteSpot = {
+  /** Set = this entry points at a spot of the shared library (flyerSpots); name/mapsLink are then only a snapshot. */
+  spotId?: string | null;
+  mapsQuery?: string | null;
   name: string;
   type: SpotType;
   time: string;
@@ -913,7 +918,8 @@ function RoutesSection() {
   const [listError, setListError] = useState<string | null>(null);
   // From the URL (?tab=routes&route=...): null = showing the list,
   // "new" = creating, otherwise the route id being edited.
-  const { route: editingId } = useAdminLocation();
+  const { route: editingId, sub } = useAdminLocation();
+  const showSpots = sub === "spots";
   const backToList = () => navigateAdmin(adminHref("routes"));
 
   useEffect(() => {
@@ -931,6 +937,47 @@ function RoutesSection() {
       }
     );
   }, []);
+
+  const subTabs = (
+    <div className="mb-5 flex max-w-md flex-wrap gap-2">
+      {[
+        { key: "tours", label: "Tours", href: adminHref("routes") },
+        { key: "spots", label: "Spots", href: adminHref("routes", null, "spots") },
+      ].map((t) => (
+        <AdminLink
+          key={t.key}
+          href={t.href}
+          className={`rounded-full px-4 py-2 text-sm font-semibold ${
+            (t.key === "spots") === showSpots
+              ? "border border-[#BDB6A2] bg-[#E9E4D6] text-[#201E1B]"
+              : "border border-[#E2DFD6] bg-white text-[#5C5850]"
+          }`}
+        >
+          {t.label}
+        </AdminLink>
+      ))}
+    </div>
+  );
+
+  if (showSpots) {
+    return (
+      <>
+        {editingId === null && subTabs}
+        <SpotsSection
+          routes={(routes ?? []).map((r) => ({
+            id: r.id,
+            region: r.region,
+            name: r.name,
+            spotIds: (r.spots ?? []).map((sp) => sp.spotId).filter((x): x is string => !!x),
+          }))}
+          editingId={editingId}
+          hrefFor={(id) => adminHref("routes", id ?? null, "spots")}
+          navigate={navigateAdmin}
+          Link={AdminLink}
+        />
+      </>
+    );
+  }
 
   if (editingId !== null) {
     const existing = editingId === "new" ? null : (routes?.find((r) => r.id === editingId) ?? null);
@@ -969,6 +1016,7 @@ function RoutesSection() {
 
   return (
     <>
+      {subTabs}
       <div className="mb-4 flex items-center justify-between gap-3">
         <p className="text-sm text-[#5C5850]">Flyering tours, grouped by region</p>
         <AdminLink
@@ -1042,11 +1090,18 @@ function RouteEditor({
     _k: keyCounter.current++,
   });
   const [spots, setSpots] = useState<EditorSpot[]>(() =>
-    (route?.spots?.length ? route.spots : [blankSpot()]).map(withKey)
+    (route?.spots ?? []).map(withKey)
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const { spots: library } = useSpotLibrary();
+  const libById = new Map((library ?? []).map((l) => [l.id, l] as const));
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQ, setPickerQ] = useState("");
+  const [newSpotName, setNewSpotName] = useState("");
+  const [newSpotLink, setNewSpotLink] = useState("");
+  const [creatingSpot, setCreatingSpot] = useState(false);
   // After a move, keep the moved card at the same spot on screen so repeated
   // taps keep moving the same entry instead of whatever slid under the finger.
   const pendingScroll = useRef<{ k: number; top: number } | null>(null);
@@ -1084,21 +1139,67 @@ function RouteEditor({
     moveSpotTo(i, i + dir);
   }
 
+  function addFromLibrary(l: LibrarySpot) {
+    setSpots((prev) => [
+      ...prev,
+      withKey({
+        spotId: l.id,
+        name: l.name,
+        mapsLink: l.mapsLink,
+        mapsQuery: l.mapsQuery,
+        type: "NORMAL",
+        time: "",
+        comment: "",
+      }),
+    ]);
+    setPickerOpen(false);
+    setPickerQ("");
+  }
+
+  async function createAndAddSpot() {
+    const n = newSpotName.trim();
+    if (!n) return;
+    setCreatingSpot(true);
+    setError(null);
+    try {
+      const link = newSpotLink.trim() || null;
+      const found = link ? await detectMapsName(link) : null;
+      const ref = await addDoc(collection(db, "flyerSpots"), {
+        name: n,
+        mapsLink: link,
+        mapsQuery: found,
+        comment: "",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      addFromLibrary({ id: ref.id, name: n, mapsLink: link, mapsQuery: found, comment: "" });
+      setNewSpotName("");
+      setNewSpotLink("");
+    } catch (err) {
+      console.error("[admin] quick spot create failed:", err);
+      setError("Creating the spot failed. Please try again.");
+    } finally {
+      setCreatingSpot(false);
+    }
+  }
+
   function validate(): string | null {
     if (!region.trim()) return "Region is required.";
     if (!name.trim()) return "Route name is required.";
     if (spots.length === 0) return "Add at least one spot.";
-    if (spots.some((sp) => !sp.name.trim())) return "Every spot needs a name.";
+    if (spots.some((sp) => !sp.spotId && !sp.name.trim())) return "Every spot needs a name.";
     return null;
   }
 
   function cleanedSpots(): RouteSpot[] {
     return spots.map((sp) => ({
-      name: sp.name.trim(),
+      // Library spots: the library is the source of truth; name/link are only a fallback snapshot.
+      ...(sp.spotId ? { spotId: sp.spotId, mapsQuery: libById.get(sp.spotId)?.mapsQuery ?? sp.mapsQuery ?? null } : {}),
+      name: (sp.spotId ? (libById.get(sp.spotId)?.name ?? sp.name) : sp.name).trim(),
       type: sp.type,
       time: (sp.time ?? "").trim(),
       comment: (sp.comment ?? "").trim(),
-      mapsLink: sp.mapsLink?.trim() || null,
+      mapsLink: (sp.spotId ? (libById.get(sp.spotId)?.mapsLink ?? sp.mapsLink) : sp.mapsLink)?.trim() || null,
       notBefore: sp.notBefore && /^\d{2}:\d{2}$/.test(sp.notBefore) ? sp.notBefore : null,
     }));
   }
@@ -1288,13 +1389,24 @@ function RouteEditor({
               </div>
             </div>
 
-            <input
-              type="text"
-              value={sp.name}
-              onChange={(e) => updateSpot(i, { name: e.target.value })}
-              placeholder="Spot name"
-              className={spotTextInput}
-            />
+            {sp.spotId ? (
+              <div>
+                <p className="text-base font-semibold">{libById.get(sp.spotId)?.name ?? sp.name}</p>
+                <p className="text-xs text-[#8A857A]">
+                  From the spot library
+                  {library && !libById.has(sp.spotId) ? " · not found in the library any more (showing the last saved name)" : ""}
+                </p>
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={sp.name}
+                onChange={(e) => updateSpot(i, { name: e.target.value })}
+                placeholder="Spot name"
+                className={spotTextInput}
+              />
+
+            )}
 
             <div className="flex gap-2">
               {(Object.keys(SPOT_TYPE_LABELS) as SpotType[]).map((t) => (
@@ -1321,6 +1433,37 @@ function RouteEditor({
               className={spotTextInput}
             />
 
+            <label className="flex items-center gap-3 text-sm text-[#5C5850]">
+              <span className="flex-1">
+                Earliest start (optional)
+                <span className="block text-xs text-[#8A857A]">Before this time the volunteer can&apos;t start the spot.</span>
+              </span>
+              <input
+                type="time"
+                value={sp.notBefore ?? ""}
+                onChange={(e) => updateSpot(i, { notBefore: e.target.value || null })}
+                className="w-32 rounded-lg border border-[#E2DFD6] bg-white px-3 py-2 text-sm text-[#201E1B] focus:border-[#201E1B] focus:outline-none"
+              />
+            </label>
+
+            {sp.spotId ? (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-[#5C5850]">
+                  Instructions: only for this tour (optional)
+                </label>
+                <textarea
+                  value={sp.comment}
+                  onChange={(e) => updateSpot(i, { comment: e.target.value })}
+                  placeholder={libById.get(sp.spotId)?.comment || "Uses the instructions from the spot library"}
+                  rows={2}
+                  className={spotTextInput}
+                />
+                <p className="mt-1 text-xs text-[#8A857A]">
+                  Empty = the volunteer sees the library text. Change the library text under Spots.
+                </p>
+              </div>
+            ) : (
+              <>
             <textarea
               value={sp.comment}
               onChange={(e) => updateSpot(i, { comment: e.target.value })}
@@ -1337,28 +1480,76 @@ function RouteEditor({
               className={spotTextInput}
             />
 
-            <label className="flex items-center gap-3 text-sm text-[#5C5850]">
-              <span className="flex-1">
-                Earliest start (optional)
-                <span className="block text-xs text-[#8A857A]">Before this time the volunteer can&apos;t start the spot.</span>
-              </span>
-              <input
-                type="time"
-                value={sp.notBefore ?? ""}
-                onChange={(e) => updateSpot(i, { notBefore: e.target.value || null })}
-                className="w-32 rounded-lg border border-[#E2DFD6] bg-white px-3 py-2 text-sm text-[#201E1B] focus:border-[#201E1B] focus:outline-none"
-              />
-            </label>
+              </>
+            )}
           </div>
         ))}
 
-        <button
-          type="button"
-          onClick={() => setSpots((prev) => [...prev, withKey(blankSpot())])}
-          className={secondaryButton}
-        >
-          + Add Spot
-        </button>
+        <div className={`${cardClass} space-y-3 border-dashed p-4`}>
+          <button type="button" onClick={() => setPickerOpen((o) => !o)} className={secondaryButton}>
+            {pickerOpen ? "Close spot list" : "+ Add spot from the library"}
+          </button>
+          {pickerOpen && (
+            <div className="space-y-2">
+              <input
+                type="search"
+                value={pickerQ}
+                onChange={(e) => setPickerQ(e.target.value)}
+                placeholder="Search spots…"
+                className={spotTextInput}
+              />
+              {library === null && <p className="text-sm text-[#5C5850]">Loading…</p>}
+              <ul className="max-h-72 divide-y divide-[#E2DFD6] overflow-y-auto rounded-lg border border-[#E2DFD6]">
+                {(library ?? [])
+                  .filter((l) => !pickerQ.trim() || l.name.toLowerCase().includes(pickerQ.trim().toLowerCase()))
+                  .map((l) => (
+                    <li key={l.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <span className="min-w-0 truncate text-sm font-semibold">{l.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => addFromLibrary(l)}
+                        className="shrink-0 rounded-full border border-[#BDB6A2] bg-[#E9E4D6] px-3 py-1 text-xs font-semibold text-[#201E1B]"
+                      >
+                        Add
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+              <div className="space-y-2 rounded-lg bg-[#FBF9F4] p-3">
+                <p className="text-xs font-medium text-[#5C5850]">Not in the list? Create a new spot</p>
+                <input
+                  type="text"
+                  value={newSpotName}
+                  onChange={(e) => setNewSpotName(e.target.value)}
+                  placeholder="Spot name"
+                  className={spotTextInput}
+                />
+                <input
+                  type="text"
+                  value={newSpotLink}
+                  onChange={(e) => setNewSpotLink(e.target.value)}
+                  placeholder="Google Maps link (optional)"
+                  className={spotTextInput}
+                />
+                <button
+                  type="button"
+                  onClick={createAndAddSpot}
+                  disabled={creatingSpot || !newSpotName.trim()}
+                  className="rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-2 text-sm font-semibold text-[#201E1B] disabled:opacity-40"
+                >
+                  {creatingSpot ? "Creating…" : "Create and add"}
+                </button>
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setSpots((prev) => [...prev, withKey({ ...blankSpot(), type: "BREAK", name: "Break" })])}
+            className={secondaryButton}
+          >
+            + Add Break / Info (only in this tour)
+          </button>
+        </div>
       </div>
 
       <div className={`${cardClass} mb-5 p-4`}>
