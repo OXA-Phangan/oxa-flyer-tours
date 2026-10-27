@@ -205,8 +205,7 @@ export default function RegisterPage() {
   return (
     <main className="flex min-h-screen flex-1 justify-center bg-[#EFEDE7] px-4 py-8 text-[#201E1B]">
       <div className="w-full max-w-md">
-        <h1 className="mb-1 text-2xl font-semibold">Flyer Volunteer Registration</h1>
-        <p className="mb-6 text-sm text-[#5C5850]">OXA Flyer Tours — sign up for your stay.</p>
+        <h1 className="mb-6 text-2xl font-semibold">Flyer Volunteer Registration</h1>
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-4 rounded-2xl border border-[#E2DFD6] bg-white p-4">
