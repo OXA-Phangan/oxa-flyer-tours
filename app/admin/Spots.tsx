@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { extractLatLng, extractPlaceName, isShortMapsLink, searchUrl, searchUrlByName } from "@/lib/maps-link";
 import { libraryFromDoc, type LibrarySpot } from "@/lib/spots";
@@ -259,6 +259,15 @@ function SpotEditor({
     setSaving(true);
     setError(null);
     try {
+      // Take the spot out of every tour that uses it first, then delete it from the library.
+      for (const r of usedIn) {
+        const snap = await getDoc(doc(db, "flyerRoutes", r.id));
+        const list = (snap.data()?.spots ?? []) as { spotId?: string | null }[];
+        const next = list.filter((sp) => sp.spotId !== spot.id);
+        if (next.length !== list.length) {
+          await updateDoc(doc(db, "flyerRoutes", r.id), { spots: next, updatedAt: serverTimestamp() });
+        }
+      }
       await deleteDoc(doc(db, "flyerSpots", spot.id));
       onBack();
     } catch (err) {
@@ -403,24 +412,30 @@ function SpotEditor({
       </div>
 
       {spot && (
-        <div className="space-y-3">
-          {usedIn.length > 0 ? (
+        <div className="space-y-3 pb-28">
+          <button
+            type="button"
+            onClick={remove}
+            disabled={saving}
+            className={
+              confirmDelete
+                ? "w-full rounded-2xl border border-red-600 bg-red-50 px-4 py-4 text-base font-semibold text-red-800 disabled:opacity-40"
+                : secondaryButton
+            }
+          >
+            {saving
+              ? "Deleting…"
+              : confirmDelete
+                ? usedIn.length > 0
+                  ? `Tap again: delete and remove from ${usedIn.length} tour${usedIn.length === 1 ? "" : "s"}`
+                  : "Tap again to confirm delete"
+                : "Delete Spot"}
+          </button>
+          {usedIn.length > 0 && (
             <p className="text-center text-xs text-[#8A857A]">
-              This spot is used in tours. Remove it from them before deleting it.
+              This spot is used in {usedIn.length} tour{usedIn.length === 1 ? "" : "s"}. Deleting it also removes it from
+              them. Don&apos;t do this while a volunteer is on one of these tours.
             </p>
-          ) : (
-            <button
-              type="button"
-              onClick={remove}
-              disabled={saving}
-              className={
-                confirmDelete
-                  ? "w-full rounded-2xl border border-red-600 bg-red-50 px-4 py-4 text-base font-semibold text-red-800 disabled:opacity-40"
-                  : secondaryButton
-              }
-            >
-              {saving ? "Deleting…" : confirmDelete ? "Tap again to confirm delete" : "Delete Spot"}
-            </button>
           )}
         </div>
       )}
