@@ -1,6 +1,8 @@
 import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import type { NextConfig } from "next";
 
+const NEW_ORIGIN = "https://phangan-flyer-tours.vercel.app";
+
 // Build ID baked into the client bundle (and the server bundle) at build time,
 // so an open tab knows which deploy it is running — compared against the live
 // value from app/api/version by components/UpdateAvailableBanner.tsx.
@@ -17,6 +19,19 @@ export default function config(phase: string): NextConfig {
   return {
     env: {
       NEXT_PUBLIC_BUILD_ID: process.env.NEXT_PUBLIC_BUILD_ID ?? "",
+    },
+    // The app moved from Firebase App Hosting (long *.hosted.app address) to Vercel.
+    // Old links (volunteer portals sent via WhatsApp, bookmarks, home-screen icons) keep working:
+    // the old App Hosting backend answers every request with a redirect to the same path on the new address.
+    async redirects() {
+      return [
+        {
+          source: "/:path*",
+          has: [{ type: "host", value: ".*\\.hosted\\.app" }],
+          destination: `${NEW_ORIGIN}/:path*`,
+          permanent: false,
+        },
+      ];
     },
   };
 }
