@@ -102,6 +102,7 @@ export function SpotsSection({
       <SpotEditor
         key={editingId}
         spot={existing}
+        others={(spots ?? []).filter((x) => x.id !== existing?.id)}
         usedIn={existing ? (usage.get(existing.id) ?? []) : []}
         onBack={() => navigate(hrefFor(null))}
         routeHref={(id) => `/admin?tab=routes&route=${encodeURIComponent(id)}`}
@@ -180,6 +181,7 @@ export function SpotsSection({
 
 function SpotEditor({
   spot,
+  others,
   usedIn,
   onBack,
   backHref,
@@ -187,6 +189,8 @@ function SpotEditor({
   Link,
 }: {
   spot: LibrarySpot | null;
+  /** Other library spots (merge targets). */
+  others: LibrarySpot[];
   usedIn: RouteUsage[];
   onBack: () => void;
   backHref: string;
@@ -202,6 +206,8 @@ function SpotEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+  const [confirmMerge, setConfirmMerge] = useState(false);
 
   async function detect(link: string) {
     const l = link.trim();
@@ -246,6 +252,45 @@ function SpotEditor({
     } catch (err) {
       console.error("[admin] spot save failed:", err);
       setError("Saving failed. Please try again.");
+      setSaving(false);
+    }
+  }
+
+  async function merge() {
+    if (!spot) return;
+    const target = others.find((o) => o.id === mergeTargetId);
+    if (!target) return;
+    if (!confirmMerge) {
+      setConfirmMerge(true);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      // Every tour entry that points at this spot now points at the target. A name used only in
+      // that tour is dropped (the tour shows the target's name); per-tour instruction texts stay.
+      for (const r of usedIn) {
+        const snap = await getDoc(doc(db, "flyerRoutes", r.id));
+        const list = (snap.data()?.spots ?? []) as Record<string, unknown>[];
+        const next = list.map((sp) =>
+          sp.spotId === spot.id
+            ? {
+                ...sp,
+                spotId: target.id,
+                nameOverride: null,
+                name: target.name,
+                mapsLink: target.mapsLink,
+                mapsQuery: target.mapsQuery,
+              }
+            : sp
+        );
+        await updateDoc(doc(db, "flyerRoutes", r.id), { spots: next, updatedAt: serverTimestamp() });
+      }
+      await deleteDoc(doc(db, "flyerSpots", spot.id));
+      onBack();
+    } catch (err) {
+      console.error("[admin] spot merge failed:", err);
+      setError("Merging failed. Please try again.");
       setSaving(false);
     }
   }
@@ -410,6 +455,48 @@ function SpotEditor({
           </button>
         </div>
       </div>
+
+      {spot && others.length > 0 && (
+        <div className={`${cardClass} mb-4 space-y-3 p-4`}>
+          <p className="text-sm font-medium">Same place as another spot?</p>
+          <p className="text-xs text-[#8A857A]">
+            Replace this spot with the other one in all tours, then delete this spot.
+          </p>
+          <select
+            value={mergeTargetId}
+            onChange={(e) => {
+              setMergeTargetId(e.target.value);
+              setConfirmMerge(false);
+            }}
+            className={inputClass}
+          >
+            <option value="">Choose the spot to keep…</option>
+            {others.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+          {mergeTargetId && (
+            <button
+              type="button"
+              onClick={merge}
+              disabled={saving}
+              className={
+                confirmMerge
+                  ? "w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-3 text-sm font-semibold text-[#201E1B] disabled:opacity-40"
+                  : secondaryButton
+              }
+            >
+              {saving
+                ? "Merging…"
+                : confirmMerge
+                  ? `Tap again: ${usedIn.length} tour${usedIn.length === 1 ? "" : "s"} will use “${others.find((o) => o.id === mergeTargetId)?.name}”, this spot is deleted`
+                  : "Replace with this spot…"}
+            </button>
+          )}
+        </div>
+      )}
 
       {spot && (
         <div className="space-y-3 pb-28">
