@@ -29,6 +29,17 @@ import BikeRental from "@/components/BikeRental";
 import { bikeLabel, parseRental, type BikeRental as BikeRentalDoc } from "@/lib/bike";
 import { libraryFromDoc, resolveRouteSpot, type LibrarySpot, type StoredRouteSpot } from "@/lib/spots";
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
+import {
+  LANGS,
+  LANG_LABELS,
+  LANG_STORAGE_KEY,
+  SKIP_REASON_VALUES,
+  TOUR_STRINGS,
+  parseLang,
+  translateContent,
+  type Lang,
+  type TourStrings,
+} from "@/lib/tour-i18n";
 
 /* ===================== Types ===================== */
 
@@ -110,6 +121,8 @@ type Volunteer = {
   onBreak: boolean;
   hasPendingStayEdit: boolean;
   pendingStayEdit: PendingStayEdit | null;
+  /** "staff" = an OXA employee with the Flyer Team position (created by the Employee Portal). */
+  kind?: "staff" | "volunteer" | null;
 };
 
 type ChatMessage = {
@@ -130,8 +143,6 @@ type TourState = {
 };
 
 type Screen = "loading" | "invalid" | "picker" | "shifts" | "tour" | "completion";
-
-const SKIP_REASONS = ["I don't have enough time", "The spot is closed", "Other reason"];
 
 /* ===================== Shared styles (matches /register and /admin) ===================== */
 
@@ -244,6 +255,40 @@ export default function TourPortalClient({ token }: { token: string }) {
   const [routes, setRoutes] = useState<FlyerRoute[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [shifts, setShifts] = useState<FlyerShift[] | null>(null);
+
+  // Staff language (2026-10-29): ?lang= from the Employee Portal link, else the
+  // last choice on this device. Volunteers always get English.
+  const [lang, setLang] = useState<Lang>("en");
+  useEffect(() => {
+    const fromUrl = parseLang(new URLSearchParams(window.location.search).get("lang"));
+    let stored: Lang | null = null;
+    try {
+      stored = parseLang(localStorage.getItem(LANG_STORAGE_KEY));
+    } catch {
+      // storage unavailable — fine
+    }
+    const next = fromUrl ?? stored;
+    if (next) setLang(next);
+    if (fromUrl) {
+      try {
+        localStorage.setItem(LANG_STORAGE_KEY, fromUrl);
+      } catch {
+        // storage unavailable — fine
+      }
+    }
+  }, []);
+  function chooseLang(next: Lang) {
+    setLang(next);
+    try {
+      localStorage.setItem(LANG_STORAGE_KEY, next);
+    } catch {
+      // storage unavailable — fine
+    }
+  }
+  const isStaff = volunteer?.kind === "staff";
+  const uiLang: Lang = volunteer ? (isStaff ? lang : "en") : lang;
+  const t = TOUR_STRINGS[uiLang];
+  const tc = (text: string) => translateContent(text, uiLang);
 
   const [activeRoute, setActiveRoute] = useState<FlyerRoute | null>(null);
   const [tour, setTour] = useState<TourState>({ currentIndex: 0, statusMap: {}, skipReasons: {} });
@@ -851,7 +896,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     if (!volunteer) return;
     const item = supplyForm.item.trim();
     if (!item) {
-      setSupplyError("Please say what's missing.");
+      setSupplyError(t.errSayMissing);
       return;
     }
     setSupplyBusy(true);
@@ -868,7 +913,7 @@ export default function TourPortalClient({ token }: { token: string }) {
       setSupplySent(true);
     } catch (err) {
       console.error("[tour] failed to submit supply report:", err);
-      setSupplyError("Something went wrong. Please try again.");
+      setSupplyError(t.errGeneric);
     } finally {
       setSupplyBusy(false);
     }
@@ -886,7 +931,7 @@ export default function TourPortalClient({ token }: { token: string }) {
           onClick={(e) => e.stopPropagation()}
           className="w-full max-w-md space-y-3 rounded-t-2xl bg-white p-6 sm:rounded-2xl"
         >
-          <h2 className="text-lg font-semibold">Which chat?</h2>
+          <h2 className="text-lg font-semibold">{t.whichChat}</h2>
           <button
             type="button"
             onClick={() => {
@@ -895,7 +940,7 @@ export default function TourPortalClient({ token }: { token: string }) {
             }}
             className="relative block w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-left text-base font-semibold text-[#201E1B]"
           >
-            💬 Chat with OXA
+            {t.chatWithOxa}
             {directUnread && (
                 <span
                   role="img"
@@ -912,7 +957,7 @@ export default function TourPortalClient({ token }: { token: string }) {
             }}
             className="relative block w-full rounded-2xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-left text-base font-semibold text-[#201E1B]"
           >
-            👥 Group Chat
+            {t.groupChat}
             {groupUnread && (
                 <span
                   role="img"
@@ -926,7 +971,7 @@ export default function TourPortalClient({ token }: { token: string }) {
             onClick={() => setChatPickerOpen(false)}
             className="block w-full px-4 py-2 text-center text-sm text-[#5C5850] underline"
           >
-            Cancel
+            {t.cancel}
           </button>
         </div>
       </div>
@@ -942,14 +987,14 @@ export default function TourPortalClient({ token }: { token: string }) {
               className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
             >
               <div className="p-6 pb-4">
-                <h2 className="text-lg font-semibold">{chatOpen === "direct" ? "Message OXA" : "Group Chat"}</h2>
+                <h2 className="text-lg font-semibold">{chatOpen === "direct" ? t.messageOxaTitle : t.groupChatTitle}</h2>
               </div>
 
               <div className="flex-1 space-y-2 overflow-y-auto px-6">
                 {(() => {
                   const list = chatOpen === "direct" ? directMessages : groupMessages;
-                  if (list === null) return <p className="text-sm text-[#5C5850]">Loading…</p>;
-                  if (list.length === 0) return <p className="text-sm text-[#5C5850]">No messages yet.</p>;
+                  if (list === null) return <p className="text-sm text-[#5C5850]">{t.loading}</p>;
+                  if (list.length === 0) return <p className="text-sm text-[#5C5850]">{t.noMessages}</p>;
                   return list.map((m) => (
                     <div
                       key={m.id}
@@ -958,7 +1003,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                       }`}
                     >
                       {chatOpen === "group" && m.senderRole !== "volunteer" && (
-                        <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">OXA Team</div>
+                        <div className="mb-0.5 text-xs font-semibold text-[#8A857A]">{t.oxaTeam}</div>
                       )}
                       {chatOpen === "group" && m.senderRole === "volunteer" && (
                         <div className="mb-0.5 text-xs font-semibold text-[#5C5850]">{m.senderName}</div>
@@ -970,7 +1015,7 @@ export default function TourPortalClient({ token }: { token: string }) {
               </div>
 
               <div className="p-6 pt-4">
-                <ChatComposer inputClassName={fieldInput} onSendText={sendChatText} onSendMedia={sendChatMedia} />
+                <ChatComposer inputClassName={fieldInput} placeholder={t.typeMessage} onSendText={sendChatText} onSendMedia={sendChatMedia} />
               </div>
             </div>
           </div>) : null;
@@ -979,7 +1024,7 @@ export default function TourPortalClient({ token }: { token: string }) {
     return (
       <Shell>
         <p className="pt-20 text-center text-[#5C5850]">
-          {loadError ?? "Loading…"}
+          {loadError ? t.loadError : t.loading}
         </p>
       </Shell>
     );
@@ -990,11 +1035,11 @@ export default function TourPortalClient({ token }: { token: string }) {
       <Shell>
         <div className={`${cardClass} p-6 text-center`}>
           <div className="mb-2 text-3xl">🔗</div>
-          <h1 className="mb-2 text-lg font-semibold">This link isn&apos;t active.</h1>
+          <h1 className="mb-2 text-lg font-semibold">{t.invalidTitle}</h1>
           <p className="text-sm text-[#5C5850]">
             {volunteer?.status === "departed"
-              ? "Your stay has ended. If this seems wrong, please contact the OXA team."
-              : "Please check the link, or contact the OXA team."}
+              ? t.invalidDeparted
+              : t.invalidDefault}
           </p>
         </div>
       </Shell>
@@ -1007,20 +1052,20 @@ export default function TourPortalClient({ token }: { token: string }) {
     return (
       <Shell>
         <button type="button" onClick={() => setScreen("picker")} className="mb-4 text-sm font-semibold underline">
-          ← Back
+          {t.backArrow}
         </button>
-        <h1 className="mb-6 text-2xl font-semibold">My shifts</h1>
+        <h1 className="mb-6 text-2xl font-semibold">{t.myShifts}</h1>
 
-        {shifts === null && <p className="text-[#5C5850]">Loading…</p>}
+        {shifts === null && <p className="text-[#5C5850]">{t.loading}</p>}
         {shifts !== null && upcomingShifts.length === 0 && (
           <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
-            No shifts planned yet. OXA will add them here.
+            {t.noShiftsYetLong}
           </div>
         )}
 
         {todays.length > 0 && (
           <div className="mb-6 space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Today · {dayLabel(todayStr)}</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.today} · {dayLabel(todayStr)}</p>
             {todays.map((s) => {
               const label = tourLabel(s);
               const route = s.tourId ? routes?.find((r) => r.id === s.tourId) ?? null : null;
@@ -1030,10 +1075,10 @@ export default function TourPortalClient({ token }: { token: string }) {
                   <p className="text-2xl font-semibold">
                     {s.startTime}–{s.endTime}
                   </p>
-                  <p className="mt-1 text-base font-medium">{label ?? "No tour planned"}</p>
+                  <p className="mt-1 text-base font-medium">{label ?? t.noTourPlanned}</p>
                   {s.note && <p className="mt-2 text-sm text-[#44403A]">{s.note}</p>}
                   {route && !confirming && (
-                    <p className="mt-2 text-sm font-semibold text-[#5C5850]">Tap to start today&apos;s tour →</p>
+                    <p className="mt-2 text-sm font-semibold text-[#5C5850]">{t.tapToStart}</p>
                   )}
                 </>
               );
@@ -1055,13 +1100,13 @@ export default function TourPortalClient({ token }: { token: string }) {
                   </button>
                   {confirming && (
                     <div className="border-t border-[#E2C27A] p-4">
-                      <p className="mb-3 text-base font-semibold">Start today&apos;s tour?</p>
+                      <p className="mb-3 text-base font-semibold">{t.startTodaysTour}</p>
                       <div className="flex gap-3">
                         <button type="button" onClick={() => setStartConfirmId(null)} className={secondaryButton}>
-                          Not now
+                          {t.notNow}
                         </button>
                         <button type="button" onClick={() => selectRoute(route)} className={primaryButton}>
-                          Start tour
+                          {t.startTour}
                         </button>
                       </div>
                     </div>
@@ -1074,7 +1119,7 @@ export default function TourPortalClient({ token }: { token: string }) {
 
         {later.length > 0 && (
           <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Upcoming</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.upcoming}</p>
             {later.map((s) => {
               const label = tourLabel(s);
               return (
@@ -1085,7 +1130,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                       {s.startTime}–{s.endTime}
                     </span>
                   </div>
-                  <p className="mt-1 text-sm text-[#5C5850]">{label ?? "Tour to be announced"}</p>
+                  <p className="mt-1 text-sm text-[#5C5850]">{label ?? t.tourToBeAnnounced}</p>
                   {s.note && <p className="mt-2 text-sm text-[#44403A]">{s.note}</p>}
                 </div>
               );
@@ -1099,12 +1144,16 @@ export default function TourPortalClient({ token }: { token: string }) {
   if (screen === "picker") {
     return (
       <Shell>
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold">Where to next?</h1>
-          {volunteer && <p className="text-sm text-[#5C5850]">Hi {volunteer.name} 👋</p>}
+        <div className="mb-6 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold">{t.whereNext}</h1>
+            {volunteer && <p className="text-sm text-[#5C5850]">{t.hi(volunteer.name)}</p>}
+          </div>
+          {isStaff && <LangSwitch lang={lang} onChange={chooseLang} />}
         </div>
 
-        {volunteer && (
+        {/* Staff have no stay dates — the stay card is for volunteers only. */}
+        {volunteer && !isStaff && (
           <div className={`${cardClass} mb-6 p-4`}>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1138,13 +1187,13 @@ export default function TourPortalClient({ token }: { token: string }) {
           onClick={() => setScreen("shifts")}
           className={`${cardClass} mb-6 block w-full p-4 text-left active:bg-[#FBF9F4]`}
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">📅 My shifts</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.myShiftsCard}</p>
           <p className="mt-1 font-semibold">
             {shifts === null
-              ? "Loading…"
+              ? t.loading
               : upcomingShifts.length === 0
-                ? "No shifts planned yet"
-                : `${upcomingShifts[0].date === todayStr ? "Today" : dayLabel(upcomingShifts[0].date)} · ${upcomingShifts[0].startTime}–${upcomingShifts[0].endTime}${
+                ? t.noShiftsYet
+                : `${upcomingShifts[0].date === todayStr ? t.today : dayLabel(upcomingShifts[0].date)} · ${upcomingShifts[0].startTime}–${upcomingShifts[0].endTime}${
                     tourLabel(upcomingShifts[0]) ? ` · ${tourLabel(upcomingShifts[0])}` : ""
                   }`}
           </p>
@@ -1155,13 +1204,13 @@ export default function TourPortalClient({ token }: { token: string }) {
           onClick={() => setToursOpen(true)}
           className={`${cardClass} mb-6 block w-full p-4 text-left active:bg-[#FBF9F4]`}
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">🛵 Flyer Tours</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.flyerToursCard}</p>
           <p className="mt-1 font-semibold">
             {routes === null
-              ? "Loading…"
+              ? t.loading
               : regions.length === 0
-                ? "No routes set up yet"
-                : `${regions.length} area${regions.length === 1 ? "" : "s"} · ${routes.length} tours`}
+                ? t.noRoutesYet
+                : t.areasTours(regions.length, routes.length)}
           </p>
         </button>
 
@@ -1178,7 +1227,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                 className="absolute left-2 top-2 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"
               />
             )}
-            💬 Message OXA
+            {t.messageOxa}
           </button>
           <button
             type="button"
@@ -1192,7 +1241,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                 className="absolute left-2 top-2 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"
               />
             )}
-            👥 Group Chat
+            {t.groupChat}
           </button>
         </div>
 
@@ -1202,7 +1251,7 @@ export default function TourPortalClient({ token }: { token: string }) {
             onClick={openSupplySheet}
             className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
           >
-            📦 Report missing supplies
+            {t.reportSupplies}
           </button>
           <button
             type="button"
@@ -1211,10 +1260,10 @@ export default function TourPortalClient({ token }: { token: string }) {
               todayBike ? "rounded-2xl border-2 border-[#BDB6A2] bg-[#E9E4D6]" : cardClass
             }`}
           >
-            🏍️ Rent a bike
+            {t.rentBike}
             {todayBike && (
               <span className="mt-1 block text-[13px] font-medium text-[#96742A]">
-                Today: {bikeLabel(todayBike.bike)} · {todayBike.status}
+                {t.bikeToday} {bikeLabel(todayBike.bike)} · {todayBike.status}
               </span>
             )}
           </button>
@@ -1229,14 +1278,14 @@ export default function TourPortalClient({ token }: { token: string }) {
               onClick={(e) => e.stopPropagation()}
               className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-6 sm:rounded-2xl"
             >
-              <h2 className="mb-4 text-lg font-semibold">Flyer Tours</h2>
+              <h2 className="mb-4 text-lg font-semibold">{t.flyerTours}</h2>
               {regions.length === 0 && (
-                <p className="text-sm text-[#5C5850]">No routes have been set up yet. Check back soon.</p>
+                <p className="text-sm text-[#5C5850]">{t.noRoutesLong}</p>
               )}
               <div className="space-y-5">
                 {regions.map(([region, list]) => (
                   <div key={region}>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{region}</p>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{tc(region)}</p>
                     <div className="space-y-3">
                       {list.map((route) => (
                         <button
@@ -1245,9 +1294,9 @@ export default function TourPortalClient({ token }: { token: string }) {
                           onClick={() => selectRoute(route)}
                           className={`${cardClass} block w-full p-4 text-left font-medium active:bg-[#FBF9F4]`}
                         >
-                          {route.name}
+                          {tc(route.name)}
                           <span className="block text-sm font-normal text-[#5C5850]">
-                            {route.spots.length} spot{route.spots.length === 1 ? "" : "s"}
+                            {t.spots(route.spots.length)}
                           </span>
                         </button>
                       ))}
@@ -1256,7 +1305,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                 ))}
               </div>
               <button type="button" onClick={() => setToursOpen(false)} className={`${secondaryButton} mt-4`}>
-                Close
+                {t.close}
               </button>
             </div>
           </div>
@@ -1349,7 +1398,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                   disabled={stayEditBusy}
                   className={secondaryButton}
                 >
-                  Cancel
+                  {t.cancel}
                 </button>
               </div>
             </div>
@@ -1369,41 +1418,41 @@ export default function TourPortalClient({ token }: { token: string }) {
             >
               {supplySent ? (
                 <>
-                  <h2 className="mb-2 text-lg font-semibold">Thanks! 🙌</h2>
+                  <h2 className="mb-2 text-lg font-semibold">{t.thanks}</h2>
                   <p className="mb-5 text-sm text-[#5C5850]">
-                    We&apos;ve let the OXA team know what&apos;s missing.
+                    {t.supplySent}
                   </p>
                   <button type="button" onClick={() => setSupplySheetOpen(false)} className={primaryButton}>
-                    Done
+                    {t.done}
                   </button>
                 </>
               ) : (
                 <>
-                  <h2 className="mb-4 text-lg font-semibold">Report missing supplies</h2>
+                  <h2 className="mb-4 text-lg font-semibold">{t.supplyTitle}</h2>
                   <div className="space-y-4">
                     <div>
                       <label htmlFor="supplyItem" className={fieldLabel}>
-                        What&apos;s missing?
+                        {t.whatsMissing}
                       </label>
                       <input
                         id="supplyItem"
                         type="text"
                         value={supplyForm.item}
                         onChange={(e) => setSupplyForm((f) => ({ ...f, item: e.target.value }))}
-                        placeholder="e.g. Flyers, scooter helmet…"
+                        placeholder={t.whatsMissingPlaceholder}
                         className={fieldInput}
                       />
                     </div>
                     <div>
                       <label htmlFor="supplyNote" className={fieldLabel}>
-                        Note <span className="font-normal text-[#8A857A]">(optional)</span>
+                        {t.note} <span className="font-normal text-[#8A857A]">{t.optional}</span>
                       </label>
                       <input
                         id="supplyNote"
                         type="text"
                         value={supplyForm.note}
                         onChange={(e) => setSupplyForm((f) => ({ ...f, note: e.target.value }))}
-                        placeholder="Any extra details"
+                        placeholder={t.notePlaceholder}
                         className={fieldInput}
                       />
                     </div>
@@ -1417,7 +1466,7 @@ export default function TourPortalClient({ token }: { token: string }) {
 
                   <div className="mt-5 space-y-3">
                     <button type="button" onClick={submitSupplyReport} disabled={supplyBusy} className={primaryButton}>
-                      {supplyBusy ? "Sending…" : "Send report"}
+                      {supplyBusy ? t.sending : t.sendReport}
                     </button>
                     <button
                       type="button"
@@ -1425,7 +1474,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                       disabled={supplyBusy}
                       className={secondaryButton}
                     >
-                      Cancel
+                      {t.cancel}
                     </button>
                   </div>
                 </>
@@ -1445,18 +1494,18 @@ export default function TourPortalClient({ token }: { token: string }) {
         <Shell>
           <div className={`${cardClass} p-8 text-center`}>
             <div className="mb-3 text-4xl">🏁</div>
-            <h1 className="mb-1 text-2xl font-semibold">Tour Completed!</h1>
+            <h1 className="mb-1 text-2xl font-semibold">{t.tourCompleted}</h1>
             <p className="mb-4 text-sm text-[#5C5850]">
-              {activeRoute.region} · {activeRoute.name}
+              {tc(activeRoute.region)} · {tc(activeRoute.name)}
             </p>
             <div className="mb-6 inline-block rounded-full bg-[#F3E4C2] px-4 py-2 text-sm font-semibold text-[#96742A]">
-              Skipped: {skipped}/{total}
+              {t.skippedCount(skipped, total)}
             </div>
             <p className="mb-6 whitespace-pre-line text-base text-[#5C5850]">
-              {activeRoute.completionMessage?.trim() || "Thank you for flyering today 🙌"}
+              {activeRoute.completionMessage?.trim() ? tc(activeRoute.completionMessage.trim()) : t.thanksFlyering}
             </p>
             <button type="button" onClick={backToPicker} className={primaryButton}>
-              Back
+              {t.back}
             </button>
           </div>
         </Shell>
@@ -1469,24 +1518,24 @@ export default function TourPortalClient({ token }: { token: string }) {
       <main className="flex min-h-screen flex-1 flex-col bg-[#EFEDE7] text-[#201E1B]">
         <div className="mx-auto w-full max-w-md flex-1 px-4 pb-28 pt-8">
           <div className="mb-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold">Flyer Tours</h1>
+            <h1 className="text-xl font-semibold">{t.flyerTours}</h1>
             <button type="button" onClick={backToPicker} className="rounded-full border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-2 text-sm font-semibold text-[#201E1B]">
-              Back
+              {t.back}
             </button>
           </div>
           <p className="mb-4 text-sm font-medium text-[#8A857A]">
-            {activeRoute.region} · {activeRoute.name}
+            {tc(activeRoute.region)} · {tc(activeRoute.name)}
           </p>
 
           {volunteer?.onBreak && (
             <div className="mb-4 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-3 text-sm">
-              ☕ You&apos;re marked on a break. Tap Resume below when you&apos;re back on route.
+              {t.onBreakNote}
             </div>
           )}
 
           {activeRoute.spots.length === 0 ? (
             <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
-              No spots configured for this route yet. Check back once the route data has been added.
+              {t.noSpots}
             </div>
           ) : (
             <div className="space-y-2">
@@ -1496,6 +1545,8 @@ export default function TourPortalClient({ token }: { token: string }) {
                     key={i}
                     index={i}
                     spot={spot}
+                    t={t}
+                    tc={tc}
                     isLast={isLast}
                     status={tour.statusMap[i] ?? "open"}
                     uploadState={uploadState[i]}
@@ -1508,6 +1559,8 @@ export default function TourPortalClient({ token }: { token: string }) {
                     key={i}
                     index={i}
                     spot={spot}
+                    t={t}
+                    tc={tc}
                     status={tour.statusMap[i] ?? "open"}
                     onTap={() => jumpToSpot(i)}
                   />
@@ -1534,7 +1587,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                   className="absolute left-2 top-2 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"
                 />
               )}
-              💬 Chat
+              {t.chat}
             </button>
             <button
               type="button"
@@ -1545,7 +1598,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                   : "flex-1 rounded-2xl border border-[#E2DFD6] bg-white px-4 py-3 text-base font-semibold text-[#201E1B]"
               }
             >
-              {volunteer?.onBreak ? "▶ Resume" : "☕ Pause"}
+              {volunteer?.onBreak ? t.resume : t.pause}
             </button>
           </div>
         </div>
@@ -1556,22 +1609,22 @@ export default function TourPortalClient({ token }: { token: string }) {
         {skipSheetOpen && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setSkipSheetOpen(false)}>
             <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-t-2xl bg-white p-6 sm:rounded-2xl">
-              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Skip Spot</h2>
-              <h3 className="mb-4 text-lg font-semibold">Why are you skipping this spot?</h3>
+              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.skipSpotTitle}</h2>
+              <h3 className="mb-4 text-lg font-semibold">{t.whySkip}</h3>
               <div className="space-y-2">
-                {SKIP_REASONS.map((reason) => (
+                {SKIP_REASON_VALUES.map((reason, i) => (
                   <button
                     key={reason}
                     type="button"
                     onClick={() => submitSkipReason(reason)}
                     className={`${cardClass} block w-full p-3 text-left active:bg-[#FBF9F4]`}
                   >
-                    {reason}
+                    {t.skipReasons[i] ?? reason}
                   </button>
                 ))}
               </div>
               <button type="button" onClick={() => setSkipSheetOpen(false)} className={`${secondaryButton} mt-4`}>
-                Cancel
+                {t.cancel}
               </button>
             </div>
           </div>
@@ -1580,16 +1633,16 @@ export default function TourPortalClient({ token }: { token: string }) {
         {skipWarning && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setSkipWarning(null)}>
             <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-t-2xl bg-white p-6 sm:rounded-2xl">
-              <h3 className="mb-2 text-lg font-semibold">Skip ahead?</h3>
+              <h3 className="mb-2 text-lg font-semibold">{t.skipAheadTitle}</h3>
               <p className="mb-5 text-sm text-[#5C5850]">
-                Jumping ahead will mark the spots in between as skipped. You can still come back to them later.
+                {t.skipAheadText}
               </p>
               <div className="space-y-3">
                 <button type="button" onClick={confirmSkipAhead} className={primaryButton}>
-                  Yes, skip ahead
+                  {t.yesSkipAhead}
                 </button>
                 <button type="button" onClick={() => setSkipWarning(null)} className={secondaryButton}>
-                  Cancel
+                  {t.cancel}
                 </button>
               </div>
             </div>
@@ -1607,11 +1660,15 @@ export default function TourPortalClient({ token }: { token: string }) {
 function CollapsedSpotRow({
   index,
   spot,
+  t,
+  tc,
   status,
   onTap,
 }: {
   index: number;
   spot: Spot;
+  t: TourStrings;
+  tc: (text: string) => string;
   status: SpotStatus;
   onTap: () => void;
 }) {
@@ -1622,7 +1679,7 @@ function CollapsedSpotRow({
     numClass = "bg-[#DCEEE1] text-[#3E8E5A]";
   }
   if (status === "skipped") {
-    suffix = <span className="text-[#C0392B]">[Skipped]</span>;
+    suffix = <span className="text-[#C0392B]">{t.skippedTag}</span>;
     numClass = "bg-[#F3E0DC] text-[#C0392B]";
   }
 
@@ -1635,7 +1692,7 @@ function CollapsedSpotRow({
       <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${numClass}`}>
         {index + 1}
       </span>
-      <span className="flex-1 truncate font-medium">{spot.name}</span>
+      <span className="flex-1 truncate font-medium">{tc(spot.name)}</span>
       {suffix}
     </button>
   );
@@ -1669,6 +1726,8 @@ function useSpotLocked(notBefore: string | null | undefined): boolean {
 function ActiveSpotCard({
   index,
   spot,
+  t,
+  tc,
   isLast,
   status,
   uploadState,
@@ -1678,6 +1737,8 @@ function ActiveSpotCard({
 }: {
   index: number;
   spot: Spot;
+  t: TourStrings;
+  tc: (text: string) => string;
   isLast: boolean;
   status: SpotStatus;
   uploadState: "uploading" | "success" | "failure" | undefined;
@@ -1691,16 +1752,16 @@ function ActiveSpotCard({
   return (
     <div className={`${cardClass} p-4`}>
       {spot.type === "BREAK" && (
-        <div className="mb-2 inline-block rounded-full bg-[#F3E4C2] px-3 py-1 text-xs font-semibold text-[#96742A]">Break</div>
+        <div className="mb-2 inline-block rounded-full bg-[#F3E4C2] px-3 py-1 text-xs font-semibold text-[#96742A]">{t.breakTag}</div>
       )}
       {spot.type === "SCOOTER_INFO" && (
         <div className="mb-2 inline-block rounded-full bg-[#F3E4C2] px-3 py-1 text-xs font-semibold text-[#96742A]">
-          Scooter Info
+          {t.scooterInfo}
         </div>
       )}
       <div className="mb-2 inline-block rounded-full bg-[#E9E4D8] px-4 py-1.5 text-base font-normal">{spot.time}</div>
       <h2 className="mb-3 text-lg font-semibold">
-        {index + 1}. {spot.name}
+        {index + 1}. {tc(spot.name)}
       </h2>
       {spot.mapsLink && (
         <a
@@ -1710,18 +1771,18 @@ function ActiveSpotCard({
           onClick={(e) => openMapsLink(e, spot.mapsLink!, spot.mapsQuery)}
           className="mb-4 block w-full rounded-xl border border-[#E2DFD6] bg-white px-4 py-3 text-center text-base font-semibold"
         >
-          📍 Google Maps Location
+          {t.mapsLocation}
         </a>
       )}
       {spot.comment && (
         <div className="mb-4 whitespace-pre-line rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] p-4 text-base font-semibold leading-relaxed">
-          {spot.comment}
+          {tc(spot.comment)}
         </div>
       )}
 
       {!resolvable && locked && (
         <div className="mb-3 rounded-xl border border-[#E2C27A] bg-[#FFF3D6] px-4 py-3 text-base font-semibold text-[#96742A]">
-          ⏰ Available from {formatHm12(spot.notBefore as string)}
+          {t.availableFrom(formatHm12(spot.notBefore as string))}
         </div>
       )}
 
@@ -1729,24 +1790,24 @@ function ActiveSpotCard({
         <div className="flex gap-3">
           {uploadState === "uploading" ? (
             <button type="button" disabled className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-semibold opacity-70">
-              ⌛ Uploading…
+              {t.uploading}
             </button>
           ) : uploadState === "success" || status === "completed" ? (
             <button type="button" disabled className="flex-1 rounded-xl border-2 border-[#3E8E5A] bg-[#EAF5EE] px-3 py-4 text-base font-semibold text-[#3E8E5A]">
-              ✅ Picture Uploaded
+              {t.pictureUploaded}
             </button>
           ) : uploadState === "failure" ? (
             <button type="button" onClick={onCamera} className="flex-1 rounded-xl border-2 border-[#C0392B] bg-[#F7E9E7] px-3 py-4 text-base font-semibold text-[#C0392B]">
-              ❌ Failed. Try Again
+              {t.failedTryAgain}
             </button>
           ) : (
             <button type="button" disabled={locked} onClick={onCamera} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-[#FBF9F4] px-3 py-4 text-base font-semibold disabled:opacity-40">
-              📸 Take a Picture
+              {t.takePicture}
             </button>
           )}
           {status !== "completed" && uploadState !== "uploading" && uploadState !== "success" && (
             <button type="button" disabled={locked} onClick={onSkip} className="flex-1 rounded-xl border-2 border-[#D6D1C3] bg-white px-3 py-4 text-base font-semibold text-[#5C5850] disabled:opacity-40">
-              ⏭️ Skip Spot
+              {t.skipSpot}
             </button>
           )}
         </div>
@@ -1755,9 +1816,27 @@ function ActiveSpotCard({
       {/* Photo and skip advance on their own; break / info spots have neither, so they need this. */}
       {resolvable && (
         <button type="button" onClick={onNext} className="w-full rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-4 text-base font-semibold text-[#201E1B]">
-          {isLast ? "Finish Route" : "Next →"}
+          {isLast ? t.finishRoute : t.next}
         </button>
       )}
+    </div>
+  );
+}
+
+/** EN / ไทย / မြန်မာ — staff only (volunteers always see English). */
+function LangSwitch({ lang, onChange }: { lang: Lang; onChange: (lang: Lang) => void }) {
+  return (
+    <div className="flex shrink-0 overflow-hidden rounded-full border border-[#E2DFD6] bg-white text-xs font-semibold">
+      {LANGS.map((l) => (
+        <button
+          key={l}
+          type="button"
+          onClick={() => onChange(l)}
+          className={`px-2.5 py-1.5 ${l === lang ? "bg-[#E9E4D6] text-[#201E1B]" : "text-[#8A857A]"}`}
+        >
+          {LANG_LABELS[l]}
+        </button>
+      ))}
     </div>
   );
 }
