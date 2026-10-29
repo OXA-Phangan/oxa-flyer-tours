@@ -1182,6 +1182,8 @@ export default function TourPortalClient({ token }: { token: string }) {
           </div>
         )}
 
+        {/* Staff (2026-10-29, Mobit): only the tours — no shifts, chats, supplies or bike. */}
+        {!isStaff && (
         <button
           type="button"
           onClick={() => setScreen("shifts")}
@@ -1198,6 +1200,7 @@ export default function TourPortalClient({ token }: { token: string }) {
                   }`}
           </p>
         </button>
+        )}
 
         <button
           type="button"
@@ -1214,6 +1217,8 @@ export default function TourPortalClient({ token }: { token: string }) {
           </p>
         </button>
 
+        {!isStaff && (
+        <>
         <div className="mb-3 flex gap-3">
           <button
             type="button"
@@ -1268,6 +1273,8 @@ export default function TourPortalClient({ token }: { token: string }) {
             )}
           </button>
         </div>
+        </>
+        )}
 
         {toursOpen && (
           <div
@@ -1572,7 +1579,8 @@ export default function TourPortalClient({ token }: { token: string }) {
 
         <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleCameraFile} className="hidden" />
 
-        {/* Sticky Chat + Pause footer */}
+        {/* Sticky Chat + Pause footer — not for staff (they pause via the Employee Portal). */}
+        {!isStaff && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[#E2DFD6] bg-white/95 px-4 py-3 backdrop-blur">
           <div className="mx-auto flex max-w-md gap-3">
             <button
@@ -1602,6 +1610,7 @@ export default function TourPortalClient({ token }: { token: string }) {
             </button>
           </div>
         </div>
+        )}
 
         {chatPicker}
         {chatSheet}
