@@ -1142,6 +1142,42 @@ export default function TourPortalClient({ token }: { token: string }) {
   }
 
   if (screen === "picker") {
+    // Staff (2026-10-29, Mobit): the portal link leads straight to the tour list —
+    // no start page, no extra tap.
+    if (isStaff) {
+      return (
+        <Shell>
+          <div className="mb-6 flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-semibold">{t.flyerTours}</h1>
+              {volunteer && <p className="text-sm text-[#5C5850]">{t.hi(volunteer.name)}</p>}
+            </div>
+            <LangSwitch lang={lang} onChange={chooseLang} />
+          </div>
+          {regions.length === 0 && <p className="text-sm text-[#5C5850]">{t.noRoutesLong}</p>}
+          <div className="space-y-5">
+            {regions.map(([region, list]) => (
+              <div key={region}>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{tc(region)}</p>
+                <div className="space-y-3">
+                  {list.map((route) => (
+                    <button
+                      key={route.id}
+                      type="button"
+                      onClick={() => selectRoute(route)}
+                      className={`${cardClass} block w-full p-4 text-left font-medium active:bg-[#FBF9F4]`}
+                    >
+                      {tc(route.name)}
+                      <span className="block text-sm font-normal text-[#5C5850]">{t.spots(route.spots.length)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Shell>
+      );
+    }
     return (
       <Shell>
         <div className="mb-6 flex items-start justify-between gap-3">
