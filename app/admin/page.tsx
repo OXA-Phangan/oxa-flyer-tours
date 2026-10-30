@@ -69,6 +69,8 @@ type RouteSpot = {
   mapsLink: string | null;
   /** "HH:MM" (Bangkok): the volunteer can't take a picture / skip this spot before this time. */
   notBefore?: string | null;
+  /** Sunset spot (2026-10-30): from 17:00 open spots before it are greyed out in the portal. */
+  sunset?: boolean;
 };
 
 type EditorSpot = RouteSpot & { _k: number };
@@ -1209,6 +1211,7 @@ function RouteEditor({
       comment: (sp.comment ?? "").trim(),
       mapsLink: (sp.spotId ? (libById.get(sp.spotId)?.mapsLink ?? sp.mapsLink) : sp.mapsLink)?.trim() || null,
       notBefore: sp.notBefore && /^\d{2}:\d{2}$/.test(sp.notBefore) ? sp.notBefore : null,
+      sunset: sp.type === "NORMAL" && sp.sunset === true,
     }));
   }
 
@@ -1463,6 +1466,28 @@ function RouteEditor({
                 className="w-32 rounded-lg border border-[#E2DFD6] bg-white px-3 py-2 text-sm text-[#201E1B] focus:border-[#201E1B] focus:outline-none"
               />
             </label>
+
+            {sp.type === "NORMAL" && (
+              <label
+                className={`flex items-start gap-3 rounded-lg border p-3 text-sm ${
+                  sp.sunset ? "border-[#F0B66A] bg-[#FFF1DE]" : "border-[#E2DFD6] bg-white"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={sp.sunset === true}
+                  onChange={(e) => updateSpot(i, { sunset: e.target.checked })}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-semibold">🌅 Sunset spot (must arrive by 6 PM)</span>
+                  <span className="block text-xs text-[#8A857A]">
+                    From 5 PM, open spots before the break are greyed out and the volunteer is sent to the break. Set
+                    &quot;Earliest start&quot; 19:00 on the spot after it for the dinner break.
+                  </span>
+                </span>
+              </label>
+            )}
 
             {sp.spotId ? (
               <div>

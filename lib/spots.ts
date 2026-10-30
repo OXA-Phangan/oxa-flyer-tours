@@ -27,6 +27,8 @@ export type StoredRouteSpot = {
   comment: string;
   mapsLink: string | null;
   mapsQuery?: string | null;
+  /** Sunset spot in this tour (2026-10-30): from SUNSET_CUTOFF on, open spots before it are greyed out. */
+  sunset?: boolean;
   /** "HH:MM" (Bangkok): the volunteer can't take a picture / skip this spot before this time. */
   notBefore?: string | null;
 };

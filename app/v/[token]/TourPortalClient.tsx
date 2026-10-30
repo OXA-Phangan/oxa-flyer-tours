@@ -94,6 +94,8 @@ type Spot = {
   /** Name Google Maps is searched for (from the shared spot library). */
   mapsQuery?: string | null;
   notBefore?: string | null;
+  /** Sunset spot (must arrive by SUNSET_ARRIVE): from SUNSET_CUTOFF open spots before it are greyed out. */
+  sunset?: boolean;
 };
 
 type FlyerRoute = {
@@ -196,6 +198,53 @@ function countOpenBetween(spots: Spot[], statusMap: Record<number, SpotStatus>, 
   return count;
 }
 
+/** Sunset rule (2026-10-30, Mobit): be at the sunset spot (Amsterdam Bar / Zen Beach) by 18:00. */
+const SUNSET_CUTOFF = "17:00";
+const SUNSET_ARRIVE = "18:00";
+
+type SunsetPlan = {
+  /** Index of the sunset spot, -1 = this tour has none. */
+  sunsetIdx: number;
+  /** Where the volunteer should go after the current spot: the break before the sunset spot, else the sunset spot. */
+  target: number;
+  targetIsBreak: boolean;
+  /** It's past SUNSET_CUTOFF and the tour has a sunset spot. */
+  active: boolean;
+};
+
+function sunsetPlan(spots: Spot[], nowHm: string): SunsetPlan {
+  const sunsetIdx = spots.findIndex((sp) => sp.sunset === true);
+  let target = sunsetIdx;
+  if (sunsetIdx > 0) {
+    for (let i = sunsetIdx - 1; i >= 0; i--) {
+      if (spots[i].type === "BREAK") {
+        target = i;
+        break;
+      }
+      if (spots[i].type === "NORMAL") break; // only a break directly before the sunset spot counts
+    }
+  }
+  return {
+    sunsetIdx,
+    target,
+    targetIsBreak: target >= 0 && target !== sunsetIdx,
+    active: sunsetIdx >= 0 && nowHm >= SUNSET_CUTOFF,
+  };
+}
+
+/** Open normal spots that are optional now: before the break/sunset spot, past the cutoff, not the current one. */
+function isGreyedOut(plan: SunsetPlan, spots: Spot[], statusMap: Record<number, SpotStatus>, currentIndex: number, i: number) {
+  if (!plan.active || i === currentIndex || i >= plan.target) return false;
+  const sp = spots[i];
+  return !!sp && !isResolvable(sp) && (statusMap[i] ?? "open") === "open";
+}
+
+/** After finishing spot i: past the cutoff, go straight to the break / sunset spot instead of the next (grey) spot. */
+function nextIndexAfter(spots: Spot[], i: number): number {
+  const plan = sunsetPlan(spots, bangkokHm());
+  return plan.active && i < plan.target ? plan.target : i + 1;
+}
+
 /* ===================== Tour event log ===================== */
 
 type TourEventType =
@@ -285,6 +334,7 @@ export default function TourPortalClient({ token }: { token: string }) {
       // storage unavailable — fine
     }
   }
+  const nowHm = useBangkokClock();
   const isStaff = volunteer?.kind === "staff";
   const uiLang: Lang = volunteer ? (isStaff ? lang : "en") : lang;
   const t = TOUR_STRINGS[uiLang];
@@ -512,7 +562,8 @@ export default function TourPortalClient({ token }: { token: string }) {
 
   function jumpToSpot(targetIndex: number) {
     if (!activeRoute || targetIndex === tour.currentIndex) return;
-    if (targetIndex > tour.currentIndex) {
+    const plan = sunsetPlan(activeRoute.spots, bangkokHm());
+    if (targetIndex > tour.currentIndex && !(plan.active && targetIndex <= plan.target)) {
       const openCount = countOpenBetween(activeRoute.spots, tour.statusMap, tour.currentIndex, targetIndex);
       if (openCount > 0) {
         setSkipWarning({ targetIndex });
@@ -559,7 +610,17 @@ export default function TourPortalClient({ token }: { token: string }) {
       finishRoute();
       return;
     }
-    const next = { ...tour, currentIndex: tour.currentIndex + 1 };
+    const next = { ...tour, currentIndex: Math.min(nextIndexAfter(activeRoute.spots, tour.currentIndex), activeRoute.spots.length - 1) };
+    setTour(next);
+    persist(activeRoute, next);
+  }
+
+  /** "Go to break →" / "Go to the sunset spot →" — grey spots stay open, no skip warning. */
+  function goToSunsetTarget() {
+    if (!activeRoute) return;
+    const plan = sunsetPlan(activeRoute.spots, bangkokHm());
+    if (plan.target < 0) return;
+    const next = { ...tour, currentIndex: plan.target };
     setTour(next);
     persist(activeRoute, next);
   }
@@ -580,7 +641,7 @@ export default function TourPortalClient({ token }: { token: string }) {
 
     const isLast = target === activeRoute.spots.length - 1;
     const next: TourState = {
-      currentIndex: isLast ? target : target + 1,
+      currentIndex: isLast ? target : Math.min(nextIndexAfter(activeRoute.spots, target), activeRoute.spots.length - 1),
       statusMap,
       skipReasons,
     };
@@ -641,7 +702,7 @@ export default function TourPortalClient({ token }: { token: string }) {
         if (spotIndex === activeRoute.spots.length - 1) {
           finishRoute(next);
         } else {
-          const advanced = { ...next, currentIndex: spotIndex + 1 };
+          const advanced = { ...next, currentIndex: Math.min(nextIndexAfter(activeRoute.spots, spotIndex), activeRoute.spots.length - 1) };
           setTour(advanced);
           persist(activeRoute, advanced);
         }
@@ -1556,6 +1617,47 @@ export default function TourPortalClient({ token }: { token: string }) {
     }
 
     const isLast = tour.currentIndex === activeRoute.spots.length - 1;
+    const plan = sunsetPlan(activeRoute.spots, nowHm);
+    const cur = tour.currentIndex;
+    const curSpot = activeRoute.spots[cur];
+    const arriveBy = formatHm12(SUNSET_ARRIVE);
+    let sunsetBanner: React.ReactNode = null;
+    if (plan.active && cur < plan.target) {
+      sunsetBanner = (
+        <div className="mb-4 rounded-2xl border-2 border-[#F0B66A] bg-[#FFF1DE] p-4 text-[#9A5A12]">
+          <p className="text-base font-bold">{t.sunsetTitle(arriveBy)}</p>
+          <p className="mt-1 text-sm font-medium">{plan.targetIsBreak ? t.sunsetFinishBreak : t.sunsetFinishGo}</p>
+          <p className="mt-1 text-sm">{t.sunsetGreyNote}</p>
+          <button
+            type="button"
+            onClick={goToSunsetTarget}
+            className="mt-3 w-full rounded-xl border border-[#BDB6A2] bg-[#E9E4D6] px-4 py-3 text-base font-semibold text-[#201E1B]"
+          >
+            {plan.targetIsBreak ? t.goToBreak : t.goToSunset}
+          </button>
+        </div>
+      );
+    } else if (plan.active && plan.targetIsBreak && cur === plan.target) {
+      sunsetBanner = (
+        <div className="mb-4 rounded-2xl border-2 border-[#F0B66A] bg-[#FFF1DE] p-4 text-base font-bold text-[#9A5A12]">
+          {t.breakBeforeSunset(arriveBy)}
+        </div>
+      );
+    } else if (
+      plan.sunsetIdx >= 0 &&
+      cur > plan.sunsetIdx &&
+      curSpot &&
+      typeof curSpot.notBefore === "string" &&
+      /^\d{2}:\d{2}$/.test(curSpot.notBefore) &&
+      nowHm < curSpot.notBefore
+    ) {
+      sunsetBanner = (
+        <div className="mb-4 rounded-2xl border-2 border-[#F0B66A] bg-[#FFF1DE] p-4 text-[#9A5A12]">
+          <p className="text-base font-bold">{t.dinnerTitle}</p>
+          <p className="mt-1 text-sm font-medium">{t.dinnerText(formatHm12(curSpot.notBefore))}</p>
+        </div>
+      );
+    }
 
     return (
       <main className="flex min-h-screen flex-1 flex-col bg-[#EFEDE7] text-[#201E1B]">
@@ -1575,6 +1677,8 @@ export default function TourPortalClient({ token }: { token: string }) {
               {t.onBreakNote}
             </div>
           )}
+
+          {sunsetBanner}
 
           {activeRoute.spots.length === 0 ? (
             <div className={`${cardClass} p-6 text-center text-[#5C5850]`}>
@@ -1605,6 +1709,9 @@ export default function TourPortalClient({ token }: { token: string }) {
                     t={t}
                     tc={tc}
                     status={tour.statusMap[i] ?? "open"}
+                    greyed={isGreyedOut(plan, activeRoute.spots, tour.statusMap, cur, i)}
+                    greyHint={cur > plan.sunsetIdx ? t.stillOpen : t.optionalOnWay}
+                    breakNow={plan.active && plan.targetIsBreak && i === plan.target && cur < plan.target}
                     onTap={() => jumpToSpot(i)}
                   />
                 )
@@ -1708,6 +1815,9 @@ function CollapsedSpotRow({
   t,
   tc,
   status,
+  greyed,
+  greyHint,
+  breakNow,
   onTap,
 }: {
   index: number;
@@ -1715,6 +1825,9 @@ function CollapsedSpotRow({
   t: TourStrings;
   tc: (text: string) => string;
   status: SpotStatus;
+  greyed: boolean;
+  greyHint: string;
+  breakNow: boolean;
   onTap: () => void;
 }) {
   let suffix: React.ReactNode = null;
@@ -1727,17 +1840,39 @@ function CollapsedSpotRow({
     suffix = <span className="text-[#C0392B]">{t.skippedTag}</span>;
     numClass = "bg-[#F3E0DC] text-[#C0392B]";
   }
+  const sunset = spot.sunset === true;
+  const rowClass = sunset
+    ? "rounded-2xl border-2 border-[#F0B66A] bg-[#FFF1DE]"
+    : greyed
+      ? "rounded-2xl border border-dashed border-[#D6D1C3] bg-white opacity-50"
+      : spot.type === "BREAK"
+        ? "rounded-2xl border border-[#E2DFD6] bg-[#FBF9F4]"
+        : cardClass;
 
   return (
     <button
       type="button"
       onClick={onTap}
-      className={`${cardClass} flex w-full items-center gap-3 p-3 text-left active:bg-[#FBF9F4]`}
+      className={`${rowClass} flex w-full items-center gap-3 p-3 text-left active:bg-[#FBF9F4]`}
     >
       <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${numClass}`}>
-        {index + 1}
+        {sunset ? "🌅" : spot.type === "BREAK" ? "☕" : index + 1}
       </span>
-      <span className="flex-1 truncate font-medium">{tc(spot.name)}</span>
+      <span className="min-w-0 flex-1">
+        {sunset && <span className="block text-[10px] font-bold uppercase tracking-wide text-[#9A5A12]">{t.sunsetTag}</span>}
+        <span className="block truncate font-medium">{tc(spot.name)}</span>
+        {greyed && <span className="block text-xs text-[#8A857A]">{greyHint}</span>}
+        {breakNow && <span className="block text-xs font-bold text-[#9A5A12]">{t.takeItNow}</span>}
+      </span>
+      {spot.time && (
+        <span
+          className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold ${
+            sunset ? "border border-[#F0B66A] text-[#9A5A12]" : "bg-[#E9E4D8] text-[#5C5850]"
+          }`}
+        >
+          {spot.time}
+        </span>
+      )}
       {suffix}
     </button>
   );
@@ -1747,6 +1882,16 @@ function CollapsedSpotRow({
 function bangkokHm(): string {
   const d = new Date(Date.now() + 7 * 3600 * 1000);
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+/** Current Bangkok "HH:MM", re-rendering every 20 s (sunset cutoff / dinner banner). */
+function useBangkokClock(): string {
+  const [now, setNow] = useState(bangkokHm);
+  useEffect(() => {
+    const id = setInterval(() => setNow(bangkokHm()), 20000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
 }
 
 /** "18:45" → "6:45 PM" */
@@ -1804,7 +1949,16 @@ function ActiveSpotCard({
           {t.scooterInfo}
         </div>
       )}
-      <div className="mb-2 inline-block rounded-full bg-[#E9E4D8] px-4 py-1.5 text-base font-normal">{spot.time}</div>
+      {spot.sunset && (
+        <div className="mb-2 inline-block rounded-full border border-[#F0B66A] bg-[#FFF1DE] px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#9A5A12]">
+          🌅 {t.sunsetTag}
+        </div>
+      )}
+      {spot.time && (
+        <div className="mb-2 block">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E9E4D8] px-4 py-1.5 text-lg font-bold">🕒 {spot.time}</span>
+        </div>
+      )}
       <h2 className="mb-3 text-lg font-semibold">
         {index + 1}. {tc(spot.name)}
       </h2>
