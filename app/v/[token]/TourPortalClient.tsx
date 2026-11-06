@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { extractLatLng, extractPlaceName, isShortMapsLink, searchUrl, searchUrlByName } from "@/lib/maps-link";
+import { openMapsLink } from "@/lib/open-maps";
 import {
   addDoc,
   collection,
@@ -26,6 +26,7 @@ import { messagePreview, uploadChatMedia, type ChatMediaType, type PreparedMedia
 import ChatComposer from "@/components/ChatComposer";
 import ChatMessageBody from "@/components/ChatMessageBody";
 import BikeRental from "@/components/BikeRental";
+import WelcomeGuide from "@/components/WelcomeGuide";
 import { bikeLabel, parseRental, type BikeRental as BikeRentalDoc } from "@/lib/bike";
 import { libraryFromDoc, resolveRouteSpot, type LibrarySpot, type StoredRouteSpot } from "@/lib/spots";
 import { bangkokToday, compareShifts, dayLabel, tourLabel, type FlyerShift } from "@/lib/shifts";
@@ -42,46 +43,6 @@ import {
 } from "@/lib/tour-i18n";
 
 /* ===================== Types ===================== */
-
-/**
- * Opens a stored Google Maps link in the format every Maps app accepts
- * (see lib/maps-link.ts). Falls back to the stored link if anything goes wrong.
- */
-function openMapsLink(e: React.MouseEvent<HTMLAnchorElement>, link: string, query?: string | null) {
-  // Goal: tap -> Google Maps APP opens directly (iOS asks once "Open in Google Maps?"), the
-  // tour portal stays untouched. The app is addressed via its URL scheme, which never
-  // replaces the current page. Desktop browsers get the web version in a new tab.
-  e.preventDefault();
-  const ua = navigator.userAgent || "";
-  const isIOS = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
-  const isAndroid = /Android/i.test(ua);
-
-  const launch = (c: { name?: string | null; lat?: number; lng?: number } | null) => {
-    const name = query || c?.name || extractPlaceName(link);
-    const ll = typeof c?.lat === "number" && typeof c?.lng === "number" ? { lat: c.lat, lng: c.lng } : extractLatLng(link);
-    const web = name ? searchUrlByName(name) : ll ? searchUrl(ll) : link;
-    const q = name ? encodeURIComponent(name) : ll ? `${ll.lat},${ll.lng}` : null;
-    const openWeb = () => {
-      window.open(web, "_blank");
-    };
-    if (!q || !(isIOS || isAndroid)) {
-      openWeb();
-      return;
-    }
-    const appUrl = isIOS ? `comgooglemaps://?q=${q}` : `geo:0,0?q=${q}`;
-    window.location.href = appUrl;
-  };
-
-  const direct = query || extractPlaceName(link) || extractLatLng(link);
-  if (direct || !isShortMapsLink(link)) {
-    launch(null);
-    return;
-  }
-  fetch(`/api/maps-resolve?u=${encodeURIComponent(link)}`)
-    .then((r) => (r.ok ? r.json() : null))
-    .then((c) => launch(c))
-    .catch(() => launch(null));
-}
 
 type SpotType = "NORMAL" | "BREAK" | "SCOOTER_INFO";
 
@@ -144,7 +105,11 @@ type TourState = {
   skipReasons: Record<number, string>;
 };
 
-type Screen = "loading" | "invalid" | "picker" | "shifts" | "tour" | "completion";
+type Screen = "loading" | "invalid" | "picker" | "shifts" | "welcome" | "tour" | "completion";
+
+/** Approved volunteers can use tours, shifts, chats, supplies and bikes from this time (Bangkok) on their check-in day. */
+const ARRIVAL_OPEN_HM = "13:00";
+const TRAVEL_BLOGS_URL = "https://oxaphangan.com/koh-phangan-travel-blogs/";
 
 /* ===================== Shared styles (matches /register and /admin) ===================== */
 
@@ -335,7 +300,14 @@ export default function TourPortalClient({ token }: { token: string }) {
     }
   }
   const nowHm = useBangkokClock();
+  const nowMs = useNowMs();
   const isStaff = volunteer?.kind === "staff";
+  // Before the arrival day (13:00 Bangkok) everything except the welcome guide / travel blogs / stay card is greyed out.
+  const arrivalOpenMs = useMemo(() => {
+    const ms = volunteer?.checkInDate ? Date.parse(`${volunteer.checkInDate}T${ARRIVAL_OPEN_HM}:00+07:00`) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  }, [volunteer?.checkInDate]);
+  const beforeArrival = !isStaff && !!volunteer && arrivalOpenMs !== null && nowMs < arrivalOpenMs;
   const uiLang: Lang = volunteer ? (isStaff ? lang : "en") : lang;
   const t = TOUR_STRINGS[uiLang];
   const tc = (text: string) => translateContent(text, uiLang);
@@ -1107,6 +1079,10 @@ export default function TourPortalClient({ token }: { token: string }) {
     );
   }
 
+  if (screen === "welcome") {
+    return <WelcomeGuide onBack={() => setScreen("picker")} />;
+  }
+
   if (screen === "shifts") {
     const todays = upcomingShifts.filter((s) => s.date === todayStr);
     const later = upcomingShifts.filter((s) => s.date > todayStr);
@@ -1239,6 +1215,30 @@ export default function TourPortalClient({ token }: { token: string }) {
         </Shell>
       );
     }
+    const guideTiles = !isStaff ? (
+      <div className="mb-6 space-y-3">
+        <button
+          type="button"
+          onClick={() => setScreen("welcome")}
+          className="block w-full rounded-2xl border-2 border-[#BDB6A2] bg-[#E9E4D6] p-4 text-left"
+        >
+          <span className="float-right font-bold text-[#96742A]">→</span>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Welcome guide</p>
+          <p className="mt-1 font-semibold">Laundry, food, beaches, the house</p>
+        </button>
+        <a
+          href={TRAVEL_BLOGS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full rounded-2xl border-2 border-[#BDB6A2] bg-[#E9E4D6] p-4 text-left"
+        >
+          <span className="float-right font-bold text-[#96742A]">↗</span>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">Travel blogs</p>
+          <p className="mt-1 font-semibold">Koh Phangan tips &amp; 3-day itinerary</p>
+        </a>
+      </div>
+    ) : null;
+    const lockedCard = "rounded-2xl border-2 border-dashed border-[#E2DFD6] bg-[#F4F2EC] text-[#A9A59A] cursor-not-allowed";
     return (
       <Shell>
         <div className="mb-6 flex items-start justify-between gap-3">
@@ -1279,14 +1279,26 @@ export default function TourPortalClient({ token }: { token: string }) {
           </div>
         )}
 
+        {beforeArrival && volunteer && (
+          <div className="mb-6 rounded-2xl border-2 border-[#F0B66A] bg-[#FFF1DE] p-4 text-[#9A5A12]">
+            <p className="font-semibold">🌴 Welcome to Koh Phangan, {volunteer.name}!</p>
+            <p className="mt-1 text-sm">
+              Tours, shifts, chats and bikes open on your arrival day ({dayLabel(volunteer.checkInDate)}) at{" "}
+              {formatHm12(ARRIVAL_OPEN_HM)}. Until then, have a look at the guide below.
+            </p>
+          </div>
+        )}
+        {beforeArrival && guideTiles}
+
         {/* Staff (2026-10-29, Mobit): only the tours — no shifts, chats, supplies or bike. */}
         {!isStaff && (
         <button
           type="button"
+          disabled={beforeArrival}
           onClick={() => setScreen("shifts")}
-          className={`${cardClass} mb-6 block w-full p-4 text-left active:bg-[#FBF9F4]`}
+          className={`mb-6 block w-full p-4 text-left ${beforeArrival ? lockedCard : `${cardClass} active:bg-[#FBF9F4]`}`}
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.myShiftsCard}</p>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${beforeArrival ? "text-[#A9A59A]" : "text-[#8A857A]"}`}>{t.myShiftsCard}</p>
           <p className="mt-1 font-semibold">
             {shifts === null
               ? t.loading
@@ -1301,10 +1313,11 @@ export default function TourPortalClient({ token }: { token: string }) {
 
         <button
           type="button"
+          disabled={beforeArrival}
           onClick={() => setToursOpen(true)}
-          className={`${cardClass} mb-6 block w-full p-4 text-left active:bg-[#FBF9F4]`}
+          className={`mb-6 block w-full p-4 text-left ${beforeArrival ? lockedCard : `${cardClass} active:bg-[#FBF9F4]`}`}
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#8A857A]">{t.flyerToursCard}</p>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${beforeArrival ? "text-[#A9A59A]" : "text-[#8A857A]"}`}>{t.flyerToursCard}</p>
           <p className="mt-1 font-semibold">
             {routes === null
               ? t.loading
@@ -1319,8 +1332,9 @@ export default function TourPortalClient({ token }: { token: string }) {
         <div className="mb-3 flex gap-3">
           <button
             type="button"
+            disabled={beforeArrival}
             onClick={() => setChatOpen("direct")}
-            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+            className={`relative flex-1 p-4 text-left font-semibold ${beforeArrival ? lockedCard : `${cardClass} active:bg-[#FBF9F4]`}`}
           >
             {directUnread && (
               <span
@@ -1333,8 +1347,9 @@ export default function TourPortalClient({ token }: { token: string }) {
           </button>
           <button
             type="button"
+            disabled={beforeArrival}
             onClick={() => setChatOpen("group")}
-            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+            className={`relative flex-1 p-4 text-left font-semibold ${beforeArrival ? lockedCard : `${cardClass} active:bg-[#FBF9F4]`}`}
           >
             {groupUnread && (
               <span
@@ -1350,16 +1365,18 @@ export default function TourPortalClient({ token }: { token: string }) {
         <div className="mb-6 flex gap-3">
           <button
             type="button"
+            disabled={beforeArrival}
             onClick={openSupplySheet}
-            className={`${cardClass} relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4]`}
+            className={`relative flex-1 p-4 text-left font-semibold ${beforeArrival ? lockedCard : `${cardClass} active:bg-[#FBF9F4]`}`}
           >
             {t.reportSupplies}
           </button>
           <button
             type="button"
+            disabled={beforeArrival}
             onClick={() => setBikeOpen(true)}
             className={`relative flex-1 p-4 text-left font-semibold active:bg-[#FBF9F4] ${
-              todayBike ? "rounded-2xl border-2 border-[#BDB6A2] bg-[#E9E4D6]" : cardClass
+              beforeArrival ? lockedCard : todayBike ? "rounded-2xl border-2 border-[#BDB6A2] bg-[#E9E4D6]" : cardClass
             }`}
           >
             {t.rentBike}
@@ -1370,6 +1387,7 @@ export default function TourPortalClient({ token }: { token: string }) {
             )}
           </button>
         </div>
+        {!beforeArrival && guideTiles}
         </>
         )}
 
@@ -1882,6 +1900,16 @@ function CollapsedSpotRow({
 function bangkokHm(): string {
   const d = new Date(Date.now() + 7 * 3600 * 1000);
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+/** Date.now(), re-rendering every 30 s (arrival-day unlock). */
+function useNowMs(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
 }
 
 /** Current Bangkok "HH:MM", re-rendering every 20 s (sunset cutoff / dinner banner). */
