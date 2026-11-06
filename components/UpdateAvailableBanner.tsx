@@ -1,29 +1,62 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { isUpdateBlocked, subscribeUpdateGuard } from "@/lib/update-guard";
 
 const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID ?? "";
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
 
 /**
  * Notices when a new deployment has landed while this tab/PWA stayed open,
- * and asks the user to reload. Next.js never reloads an open tab on its own,
- * so without this a tab left open across a deploy keeps running the old
- * bundle indefinitely.
+ * and asks the user to reload. Next.js never reloads an open tab on its
+ * own, so without this a tab left open across a deploy keeps running the
+ * old bundle indefinitely — the 2026-09-23 checklist `checkedAt` incident
+ * was exactly that (a stale tab writing ticks with the pre-`checkedAt`
+ * toggle code hours after the fix was live).
  *
- * Checks app/api/version on every return to visibility (phones mostly resume
- * from background rather than sit visible) plus every 10 min while visible,
- * never while hidden. Prompts rather than auto-reloads — a forced reload
- * could discard a half-filled form or an in-progress photo upload — and is
- * deliberately not dismissible. Failures (offline etc.) are silent; the next
- * check just tries again. Inert in local dev (no BUILD_ID).
+ * Checks app/api/version on every return to visibility (phones mostly
+ * resume from background rather than sit visible) plus every 10 min while
+ * visible, never while hidden. Prompts rather than auto-reloads — a forced
+ * reload could discard staged proof photos or a half-filled form — and is
+ * only snoozable (see below). Failures (offline etc.) are silent; the
+ * next check just tries again. Inert in local dev (no BUILD_ID).
  *
- * `sticky`, not `fixed`: it occupies its own space in the flow, so it pushes
- * page content down instead of covering the top row, while staying pinned on
- * scroll. Rendered once from the root layout, so it covers /admin and /v/*.
+ * Shown as a centered pop-up over the page (2026-10-31, Mobit: the thin
+ * top bar was overlooked by many employees). "Reload" is the big button;
+ * it waits while someone is uploading or editing (lib/update-guard.ts), and
+ * "Later" still hides it for 5 minutes as a fallback.
  */
 export function UpdateAvailableBanner() {
+  const message = "A new version is available.";
+  const reloadLabel = "Reload";
+  const laterLabel = "Later";
   const [stale, setStale] = useState(false);
+  const [snoozedUntil, setSnoozedUntil] = useState(0);
+  const [, setTick] = useState(0);
+  // Not while uploading or editing (lib/update-guard.ts) — shown as soon as
+  // that's over. focusout fires before the next field gets focus, so the
+  // check waits a moment to avoid flashing between two fields.
+  const [blocked, setBlocked] = useState(false);
+  useEffect(() => {
+    let timer = 0;
+    const update = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setBlocked(isUpdateBlocked()), 300);
+    };
+    setBlocked(isUpdateBlocked());
+    const unsubscribe = subscribeUpdateGuard(update);
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, []);
+
+  // Re-show after "Later": re-render once the snooze has run out.
+  useEffect(() => {
+    if (snoozedUntil === 0) return;
+    const id = window.setTimeout(() => setTick((n) => n + 1), Math.max(0, snoozedUntil - Date.now()) + 50);
+    return () => window.clearTimeout(id);
+  }, [snoozedUntil]);
 
   useEffect(() => {
     if (!BUILD_ID || stale) return;
@@ -53,21 +86,31 @@ export function UpdateAvailableBanner() {
     };
   }, [stale]);
 
-  if (!stale) return null;
+  if (!stale || blocked || Date.now() < snoozedUntil) return null;
 
   return (
-    <div
-      role="status"
-      className="sticky top-0 z-[60] flex items-center justify-between gap-3 bg-[#201E1B] px-4 py-2 text-xs text-white"
-    >
-      <span>A new version is available.</span>
-      <button
-        type="button"
-        onClick={() => window.location.reload()}
-        className="shrink-0 rounded-md bg-white px-3 py-1 font-semibold text-[#201E1B]"
-      >
-        Update
-      </button>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-6">
+      <div role="alertdialog" aria-modal="true" className="w-full max-w-sm rounded-[24px] bg-white p-6 text-center shadow-xl">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="#4A4438" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto" aria-hidden="true">
+          <path d="M20 11A8.1 8.1 0 0 0 4.5 9M4 5v4h4" />
+          <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+        </svg>
+        <p className="mt-3 text-lg font-semibold text-[#2A2620]">{message}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-5 w-full rounded-2xl border border-[#E4E0D6] bg-[#EFEAE0] px-4 py-4 text-base font-semibold text-[#2A2620] active:bg-[#E4DDC9]"
+        >
+          {reloadLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => setSnoozedUntil(Date.now() + 5 * 60 * 1000)}
+          className="mt-3 text-xs text-[#8A8578] underline"
+        >
+          {laterLabel}
+        </button>
+      </div>
     </div>
   );
 }
