@@ -138,7 +138,7 @@ const SECTIONS: Section[] = [
             text: "This is a grilled pork salad. This one can be a little bit more spicy than other dishes.",
           },
           {
-            title: "Phangan curry",
+            title: "Penang curry",
             text: "Thailand is also famous for its curries. This one is not too spicy, but very tasty. It is made of red curry paste, coconut milk, and some kind of protein source (chicken, tofu, etc.).",
           },
           {
