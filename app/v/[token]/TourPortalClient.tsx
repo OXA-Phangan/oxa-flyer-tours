@@ -1187,7 +1187,6 @@ export default function TourPortalClient({ token }: { token: string }) {
           <div className="mb-6 flex items-start justify-between gap-3">
             <div>
               <h1 className="text-2xl font-semibold">{t.flyerTours}</h1>
-              {volunteer && <p className="text-sm text-[#5C5850]">{t.hi(volunteer.name)}</p>}
             </div>
             <LangSwitch lang={lang} onChange={chooseLang} />
           </div>
