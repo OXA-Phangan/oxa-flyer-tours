@@ -102,6 +102,8 @@ type FlyerVolunteerDoc = {
   checkOutDate: string;
   checkOutTime: string | null;
   status: "active" | "departed";
+  /** "staff" = permanent flyer staff (no stay dates); missing = volunteer. */
+  kind?: string | null;
   onBreak: boolean;
   hasPendingStayEdit: boolean;
   pendingStayEdit: PendingStayEdit | null;
@@ -1653,7 +1655,7 @@ function RouteEditor({
 
 /* ===================== Crew ===================== */
 
-type CrewGroup = "active" | "confirmed" | "departed";
+type CrewGroup = "active" | "confirmed" | "staff" | "departed";
 
 /**
  * Active = already arrived, Confirmed = registered/approved but arrival date still ahead,
@@ -1661,12 +1663,14 @@ type CrewGroup = "active" | "confirmed" | "departed";
  */
 function crewGroup(v: FlyerVolunteerDoc, today: string): CrewGroup {
   if (v.status === "departed") return "departed";
+  if (v.kind === "staff") return "staff";
   return v.checkInDate > today ? "confirmed" : "active";
 }
 
 const CREW_GROUPS: { key: CrewGroup; label: string; chip: string }[] = [
   { key: "active", label: "Active", chip: "bg-green-100 text-green-800" },
   { key: "confirmed", label: "Confirmed", chip: "bg-[#FFF3D6] text-[#96742A]" },
+  { key: "staff", label: "Staff", chip: "bg-[#E4E8F3] text-[#3C4A7A]" },
   { key: "departed", label: "Departed", chip: "bg-[#E2DFD6] text-[#5C5850]" },
 ];
 
@@ -1703,7 +1707,7 @@ function CrewSection({ adminEmail }: { adminEmail: string }) {
 
   return (
     <>
-      <p className="mb-4 text-sm text-[#5C5850]">All flyer volunteers</p>
+      <p className="mb-4 text-sm text-[#5C5850]">All flyer volunteers and staff</p>
 
       {listError && (
         <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">
@@ -1747,9 +1751,11 @@ function CrewSection({ adminEmail }: { adminEmail: string }) {
                         {g.label}
                       </span>
                     </div>
-                    <div className="mt-1 text-sm text-[#5C5850]">
-                      {v.checkInDate} → {v.checkOutDate}
-                    </div>
+                    {v.checkInDate && (
+                      <div className="mt-1 text-sm text-[#5C5850]">
+                        {v.checkInDate} → {v.checkOutDate}
+                      </div>
+                    )}
                     <div className="mt-1 flex gap-2 text-xs">
                       {v.onBreak && (
                         <span className="rounded-full bg-[#FBF9F4] px-2 py-0.5 text-[#8A857A]">☕ On break</span>
