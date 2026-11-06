@@ -1243,8 +1243,14 @@ export default function TourPortalClient({ token }: { token: string }) {
       <Shell>
         <div className="mb-6 flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">{t.whereNext}</h1>
-            {volunteer && <p className="text-sm text-[#5C5850]">{t.hi(volunteer.name)}</p>}
+            {isStaff ? (
+              <h1 className="text-2xl font-semibold">{t.flyerTours}</h1>
+            ) : (
+              <>
+                <h1 className="text-2xl font-semibold">Hello{volunteer ? ` ${volunteer.name}` : ""}!</h1>
+                <p className="text-sm text-[#5C5850]">Volunteer Portal</p>
+              </>
+            )}
           </div>
           {isStaff && <LangSwitch lang={lang} onChange={chooseLang} />}
         </div>
