@@ -104,24 +104,24 @@ export function UpdateAvailableBanner() {
       <div
         role="alertdialog"
         aria-modal="true"
-        className="max-w-full rounded-[18px] border border-[#CFC7B4] bg-[#F5F3EF]/75 px-[18px] py-4 text-center shadow-xl backdrop-blur-[6px]"
+        className="max-w-full rounded-[24px] border border-[#CFC7B4] bg-[#F5F3EF]/75 p-[30px] text-center shadow-xl backdrop-blur-[6px]"
       >
-        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#4A4438" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="#4A4438" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto" aria-hidden="true">
           <path d="M20 11A8.1 8.1 0 0 0 4.5 9M4 5v4h4" />
           <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
         </svg>
-        <p className="mt-2 whitespace-nowrap text-[13px] font-semibold text-[#2A2620]">{message}</p>
+        <p className="mt-3 whitespace-nowrap text-[18px] font-semibold text-[#2A2620]">{message}</p>
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-3 w-full rounded-xl border border-[#B5AC96] bg-[#E4DDC9] px-4 py-2.5 text-[13px] font-semibold text-[#2A2620] active:bg-[#D9D1BC]"
+          className="mt-5 w-full rounded-2xl border border-[#B5AC96] bg-[#E4DDC9] px-4 py-3.5 text-[16px] font-semibold text-[#2A2620] active:bg-[#D9D1BC]"
         >
           {reloadLabel}
         </button>
         <button
           type="button"
           onClick={() => setSnoozedUntil(Date.now() + 5 * 60 * 1000)}
-          className="mt-2 text-[11px] text-[#8A8578] underline"
+          className="mt-3 text-[13px] text-[#8A8578] underline"
         >
           {laterLabel}
         </button>
